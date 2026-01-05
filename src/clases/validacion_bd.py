@@ -11,7 +11,6 @@ def validar_y_registrar_profesor(cuenta, nombre_completo, dias, hora_entrada, ho
     conexion = None 
     cursor = None
     transaccion_exitosa = False
-
     if isinstance(linea, str):
         esta_en_linea_nuevo = (linea.strip().lower() == "sí") 
     else:
@@ -24,14 +23,12 @@ def validar_y_registrar_profesor(cuenta, nombre_completo, dias, hora_entrada, ho
         if conexion is None:
             messagebox.showerror("Error de Conexión", "No se pudo establecer conexión con la base de datos.")
             return False
-
         cursor = conexion.cursor()
         
         sql_check = "SELECT en_linea, dias_disponibles FROM profesores WHERE profesor_id = %s"
         cursor.execute(sql_check, (cuenta,))
         resultado = cursor.fetchone()
-        
-        
+          
         if resultado:
             en_linea_db = resultado[0]
             dias_db = resultado[1] 

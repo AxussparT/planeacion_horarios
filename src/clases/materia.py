@@ -1,7 +1,7 @@
 from src.conexion import get_conexion
 from tkinter import messagebox
 import mysql.connector
-from .validar_materia import validar_y_registrar_materia # Importa la función de validación
+from .Validar_materia import validar_y_registrar_materia # Importa la función de validación
 
 class materia:
     def __init__(self, clave, nombre, horas_semana, semestre):
@@ -29,11 +29,9 @@ class materia:
             self.nombre, 
             self.horas_semana, 
             self.semestre
-        )
-        
+        ) 
         if exito:
             print("Registro/Actualización de materia completado con éxito.")
         else:
             print("Fallo en el registro/actualización de materia.")
-
         return exito

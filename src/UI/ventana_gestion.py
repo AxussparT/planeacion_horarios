@@ -61,6 +61,13 @@ class VentanaGestion:
         self.frame_der.pack(side='left',padx=10,anchor='n')
         ttk.Label(self.frame_der,text="Vista previa",background='#0A0F1E',foreground='#ffffff', font=("Roboto", 10)).pack(pady=3,padx=10)
         
+        ttk.Label(self.frame_izq,text="Seleccione el periodo",background='#0A0F1E',foreground='#ffffff',font=("Roboto",10))
+        self.combo_periodos=ttk.Combobox(self.frame_izq,width=30,font=("Roboto",9),state='readonly')
+        self.combo_periodos['values']=("A (Septiembre-Octubre)","B (Febrero - Junio)")
+        self.combo_periodos.pack(pady=2,padx=10)
+        
+        #ejecucion del filtro de materias
+        self.combo_periodos.bind("<<ComboboxSelected>>",self.filtrar_materias_por_periodo )
         # Frame de profesores y materias
         frame_contenedor2=ttk.Frame(self.frame_izq,style='blue.TFrame')
         frame_contenedor2.pack(fill='x',pady=10)
@@ -70,7 +77,7 @@ class VentanaGestion:
         ttk.Label(self.frame_izq_pf,text="Profesor",background='#0A0F1E',foreground='#ffffff', font=("Roboto", 10)).pack(pady=3,padx=10)
         
         # COMBO PROFESORES
-        self.combo_profesores=ttk.Combobox(self.frame_izq_pf,width=20,font=("Roboto", 15), state='readonly') 
+        self.combo_profesores=ttk.Combobox(self.frame_izq_pf,width=30,font=("Roboto", 9), state='readonly') 
         self.combo_profesores.pack(pady=3,padx=10)
         # VINCULACIÓN: Actualiza la vista previa al seleccionar profesor
         self.combo_profesores.bind("<<ComboboxSelected>>", self.actualizar_vista_previa) 
@@ -86,7 +93,7 @@ class VentanaGestion:
         ttk.Label(self.frame_der_pf,text="materia",background='#0A0F1E',foreground='#ffffff', font=("Roboto", 10)).pack(pady=3,padx=10)
         
         # COMBO MATERIAS
-        self.combo_materias=ttk.Combobox(self.frame_der_pf,width=20,font=("Roboto",15), state='readonly')
+        self.combo_materias=ttk.Combobox(self.frame_der_pf,width=30,font=("Roboto",9), state='readonly')
         self.combo_materias.pack(pady=3,padx=10)
         
         # VINCULACIÓN: Actualiza semestre y vista previa al seleccionar materia
@@ -103,7 +110,7 @@ class VentanaGestion:
         
         # COMBO GRUPOS
         # ESTADO NORMAL para permitir la entrada manual de nuevos grupos
-        self.combo_grupos=ttk.Combobox(self.frame_izq_gp,width=20,font=("Roboto", 15), state='normal') 
+        self.combo_grupos=ttk.Combobox(self.frame_izq_gp,width=20,font=("Roboto", 9), state='normal') 
         self.combo_grupos.pack(pady=3,padx=10)
         
         boton_guardar2 = ttk.Button(self.frame_izq_gp, text="Empezar asignacion automatica")
@@ -114,7 +121,7 @@ class VentanaGestion:
         self.frame_der_gp.pack(side='left',padx=10,anchor='n')
         ttk.Label(self.frame_der_gp,text="semestre",background='#0A0F1E',foreground='#ffffff', font=("Roboto", 10)).pack(pady=3,padx=10)
         # COMBO SEMESTRE
-        self.combo_semestre=ttk.Combobox(self.frame_der_gp,width=20,font=("Roboto",15), state='readonly')
+        self.combo_semestre=ttk.Combobox(self.frame_der_gp,width=30,font=("Roboto",10), state='readonly')
         self.combo_semestre.pack(pady=3,padx=10)
         
         # Vista Previa (Tabla)
@@ -142,12 +149,33 @@ class VentanaGestion:
         self.materias_map = {} 
         self.grupos_map = {}
         self.semestres_map = {}
+        self.grupos_por_semestre={
+            "1":["S1A","S1B","S1C","S1D","S1E","S1F"],
+            "2":["S2A","S2B","S2C","S2D","S2E","S2F"],
+            "3":["S3A","S3B","S3C","S3D","S3E"],
+            "4":["S4A","S4B","S4C","S4D","S4E"],
+            "5":["S5A","S5B","S5C","S5D","S5E"],
+            "6":["S6A","S6B","S6C","S6D"],
+            "7":["S7A","S7B","S7C","S7D"],
+            "8":["S8A","S8B","S8C"],
+            "9":["S9A","S9B","S9C"]
+        }
         
         # 4. Cargar datos iniciales y esperar cierre
         self.cargar_combos_bd() 
         self.ventana.wait_window() 
         
     # --- MÉTODOS DE LA CLASE ---
+    def cargar_grupos_por_semestre(self,semestre_id):
+        semestre_id=str(semestre_id)
+        grupos_disponibles=self.grupos_por_semestre.get(semestre_id,[])
+        self.combo_grupos['values']=grupos_disponibles
+        if grupos_disponibles:
+            self.combo_grupos.set(grupos_disponibles[0])
+        else:
+            self.combo_grupos.set("")
+            self.combo_grupos.set("sin grupos cargados")
+            
     
     def cargar_combos_bd(self):
         """Carga los datos de las tablas (profesores, materias, semestres, grupos) en los combos."""
@@ -180,17 +208,25 @@ class VentanaGestion:
             
             self.semestres_map = {str(row[0]): f"{row[0]} - {row[1]}" for row in semestres_data_raw}
             semestres_combo_data = list(self.semestres_map.values())
-
-            self.combo_semestre['values'] = semestres_combo_data
+            
+            self.lista_maestra_semestres=[]
+            for row in semestres_data_raw:
+                self.lista_maestra_semestres.append({
+                    "texto": f"{row[0]}-{row[1]}",
+                    "id": int (row[0])
+                })
+            self.combo_semestre['values']=semestres_combo_data
             if semestres_combo_data:
                 self.combo_semestre.set(semestres_combo_data[0])
 
             # --- MATERIAS (Guardando ID de semestre en materias_map) ---
-            sql_materias = "SELECT materia_id, nombre, semestre_id FROM materias ORDER BY nombre"
+            sql_materias = "SELECT materia_id, nombre, semestre_id FROM materias ORDER BY semestre_id"
             cursor.execute(sql_materias)
             
             materias_combo_data = []
-            self.materias_map = {} 
+            self.materias_map = {}
+            self.lista_maestra_materias=[]
+            
             
             for row in cursor.fetchall():
                 materia_id, nombre_materia, semestre_id = row
@@ -199,6 +235,11 @@ class VentanaGestion:
                 
                 self.materias_map[str(materia_id)] = semestre_id 
                 
+                self.lista_maestra_materias.append({
+                    "texto":combo_value,
+                    "semestre": int(semestre_id)
+                })
+                
             self.combo_materias['values'] = materias_combo_data
             if materias_combo_data:
                 self.combo_materias.set(materias_combo_data[0])
@@ -206,17 +247,18 @@ class VentanaGestion:
                 
             # --- GRUPOS ---
             # Nota: Los grupos se cargan para que aparezcan en el desplegable
-            sql_grupos = "SELECT grupo_id, nombre FROM grupos ORDER BY nombre"
-            cursor.execute(sql_grupos)
-            grupos_data_raw = cursor.fetchall()
+            #sql_grupos = "SELECT grupo_id, nombre FROM grupos ORDER BY nombre"
+            #cursor.execute(sql_grupos)
+            #grupos_data_raw = cursor.fetchall()
             
             # Almacenar en un mapa para referencia rápida y en la lista de valores del combo
-            self.grupos_map = {str(row[0]): f"{row[0]} - {row[1]}" for row in grupos_data_raw}
-            grupos_data = list(self.grupos_map.values())
-            
-            self.combo_grupos['values'] = grupos_data
-            if grupos_data:
-                self.combo_grupos.set(grupos_data[0])
+            #self.grupos_map = {str(row[0]): f"{row[0]} - {row[1]}" for row in grupos_data_raw}
+            #grupos_data = list(self.grupos_map.values())
+            self.combo_grupos.set("cargando...")
+            #self.combo_grupos['values'] = grupos_data
+            #if grupos_data:
+                #self.combo_grupos.set(grupos_data[0])
+                
             
             # Cargar la tabla inicial
             self.actualizar_vista_previa()
@@ -230,9 +272,50 @@ class VentanaGestion:
             if conexion is not None and conexion.is_connected():
                 conexion.close()
 
+    def filtrar_materias_por_periodo(self,event=None):
+        """filtrar materias de acuerdo al periodo selecccionado"""
+        periodo_seleccionado=self.combo_periodos.get()
+        
+        if not periodo_seleccionado:
+            return
+        semestres_validos=[]
+        if "A (" in periodo_seleccionado:
+            semestres_validos=[1,3,5,7,9]
+        elif "B (" in periodo_seleccionado:
+            semestres_validos=[2,4,6,8,10]
+        
+        materias_filtradas=[]
+        if hasattr(self,'lista_maestra_materias'):
+            for item in self.lista_maestra_materias:
+                if item["semestre"] in semestres_validos:
+                    materias_filtradas.append(item["texto"])
+        self.combo_materias['values']=materias_filtradas
+        
+        semestres_filtrados=[]
+        if hasattr(self,'lista_maestra_semestres'):
+            for item in self.lista_maestra_semestres:
+                if item["id"] in semestres_validos:
+                    semestres_filtrados.append(item["texto"])
+        self.combo_semestre['values']=semestres_filtrados
+        
+        
+        self.combo_materias.set('')
+        self.combo_semestre.set('')
+        self.combo_grupos['values']=[]
+        self.combo_grupos.set('')
+        
+        if semestres_filtrados:
+            self.combo_semestre.set(semestres_filtrados[0])
+        
+        if materias_filtradas:
+            self.combo_materias.set(materias_filtradas[0])
+            self.mostrar_semestre_de_materia()
+        else:
+            self.combo_materias.set('sin materias para este periodo')
+        
     def obtener_o_crear_grupo(self, grupo_input_str):
-        """
-        Busca el ID de un grupo existente o lo inserta como nuevo grupo si no lo encuentra.
+
+        """Busca el ID de un grupo existente o lo inserta como nuevo grupo si no lo encuentra.
         Si el grupo_input_str es simple (ej. "SA"), se usa ese valor como ID y Nombre.
         Retorna el grupo_id (VARCHAR) o None si falla.
         """
@@ -296,7 +379,9 @@ class VentanaGestion:
         """Detecta la materia seleccionada y actualiza el combobox de semestre automáticamente."""
         selected_materia_str = self.combo_materias.get()
         if not selected_materia_str:
-            self.combo_semestre.set("") 
+            self.combo_semestre.set("")
+            self.combo_grupos['values']=[]
+            self.combo_grupos.set("")
             return
             
         try:
@@ -310,12 +395,17 @@ class VentanaGestion:
                     self.combo_semestre.set(semestre_display_value)
                 else:
                     self.combo_semestre.set("Error: Semestre desconocido")
+                self.cargar_grupos_por_semestre(semestre_id)
             else:
                 self.combo_semestre.set("No Asignado")
+                self.combo_grupos['values']=[]
+                self.combo_grupos.set("")
                 
         except Exception as e:
             print(f"Error al procesar la selección de materia: {e}")
             self.combo_semestre.set("")
+            self.combo_grupos['values']=[]
+            self.combo_grupos.set("")
 
     def asignar_profesor_materia(self):
         """Guarda la asignación de Profesor, Materia y GRUPO en la tabla 'asignaciones'."""
