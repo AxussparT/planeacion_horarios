@@ -36,7 +36,8 @@ def validar_y_registrar_profesor(cuenta, nombre_completo, dias, hora_entrada, ho
             
             sql_update_base = """
                 UPDATE profesores 
-                SET disponible_inicio = %s,
+                SET nombre = %s,
+                    disponible_inicio = %s,
                     disponible_fin = %s,
                     dias_disponibles = %s,
                     en_linea = %s
@@ -55,47 +56,43 @@ def validar_y_registrar_profesor(cuenta, nombre_completo, dias, hora_entrada, ho
                     messagebox.showwarning("Advertencia", 
                         f"El profesor con cuenta '{cuenta}' ya estaba como **{estado_actual}**.\nSe actualizarán días, horas y disponibilidad. (Queda: **{estado_nuevo}**)."
                     )
-                    valores_update = (hora_entrada, hora_salida, dias, 'SI', cuenta) 
                     
                 else: 
                     messagebox.showinfo("Actualización", 
                         f"El profesor '{cuenta}' ya estaba como **{estado_actual}**.\nSe actualizará a **{estado_nuevo}** y se reemplazarán los días y horas."
                     )
-                    valores_update = (hora_entrada, hora_salida, dias, 'NO', cuenta)
 
+                #se dejo solo esta line de valores_update simplificar
+                valores_update = (nombre_completo, hora_entrada, hora_salida, dias, linea_para_bd_enum, cuenta)
                 cursor.execute(sql_update_base, valores_update)
-                messagebox.showinfo("Actualización Exitosa", f"Profesor '{cuenta}' **Actualizado**. Queda: **{estado_nuevo}**. Días y horarios modificados.")
+                messagebox.showinfo("Actualización Exitosa", f"Profesor '{cuenta}' Actualizado. Queda: {estado_nuevo}. Días y horarios modificados.")
                 transaccion_exitosa = True
                 return True
 
 
             # -----------------------------------------------------------
-            # CASO B
+            # CASO B (El profesor NO estaba en línea originalmente)
             # -----------------------------------------------------------
             elif not esta_en_linea_db:
                 
                 if esta_en_linea_nuevo:
                     messagebox.showinfo("Actualización", 
-                        f"El profesor '{cuenta}' ya está en formato **{estado_actual}**.\nSe actualizará a disponible en **{estado_nuevo}** y se reemplazarán los datos."
+                        f"El profesor '{cuenta}' ya está en formato {estado_actual}.\nSe actualizará a disponible en {estado_nuevo} y se reemplazarán los datos."
                     )
-                    valores_update = (hora_entrada, hora_salida, dias, 'SI', cuenta) 
-                    
-                    cursor.execute(sql_update_base, valores_update)
-                    
-                    messagebox.showinfo("Actualización Exitosa", f"Profesor '{cuenta}' **Actualizado**. Ahora disponible en **{estado_nuevo}**.")
-                    transaccion_exitosa = True
-                    return True
-                
                 else: 
                     messagebox.showwarning("Actualización", 
-                        f"El profesor con cuenta '{cuenta}' ya está registrado en formato **{estado_actual}**.\nSe **actualizarán** los días y horarios con los nuevos valores. (Queda: **{estado_nuevo}**)."
+                        f"El profesor con cuenta '{cuenta}' ya está registrado en formato {estado_actual}.\nSe actualizarán los días y horarios. (Sigue: {estado_nuevo})."
                     )
-                    valores_update = (hora_entrada, hora_salida, dias, 'NO', cuenta) 
-                    cursor.execute(sql_update_base, valores_update)
-                    
-                    messagebox.showinfo("Actualización Exitosa", f"Profesor '{cuenta}' **Actualizado**. Días y horarios reemplazados. (Sigue: Solo Presencial).")
-                    transaccion_exitosa = True
-                    return True
+
+                # Definimos los valores una sola vez incluyendo el nombre_completo
+                valores_update = (nombre_completo, hora_entrada, hora_salida, dias, linea_para_bd_enum, cuenta)
+                
+                # Ejecutamos la actualización
+                cursor.execute(sql_update_base, valores_update)
+                
+                messagebox.showinfo("Actualización Exitosa", f"Profesor '{cuenta}' actualizado. Datos de nombre y horarios sincronizados.")
+                transaccion_exitosa = True
+                return True
             
             # -----------------------------------------------------------
             # CASO C: El profesor NO existe (Alta nueva)

@@ -5,7 +5,7 @@ import mysql.connector
 from src.conexion import get_conexion
 from tkinter import messagebox
 from src.UI.ventana_gestion import VentanaGestion
-
+from src.clases.validacion_bd import validar_y_registrar_profesor # Ajusta la ruta según tu proyecto
 
 # Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process                         
 # .\.venv\Scripts\Activate      
@@ -474,11 +474,15 @@ class VentanaPrincipal:
         self.tabla_profesores.delete(*self.tabla_profesores.get_children())
         
         for p in datos:
+            # p[4] contiene 'SI' o 'NO' directamente de la base de datos
+            valor_en_linea = p[4]
+
             self.tabla_profesores.insert(
                 "","end",
                 values=(
                     p[0],p[1],p[2],p[3],
-                    "SI" if p[4] else "NO"
+                    #para que estraiga tal cual esta en la BD
+                    valor_en_linea
                 )
             )
 
@@ -604,13 +608,15 @@ class VentanaPrincipal:
         horario_inicio=self.entry_horario_i.get()
         horario_fin= self.entry_horario_f.get()
         dias_seleccionados = self.dias_seleccionados
-        nombre_completo= f"{nombre} {apellido}"
+        #formatear el nombre
+        nombre_completo = f"{nombre} {apellido}".strip()
         # 2. Llamar al constructor de la clase 'profesor'
         try:
-            nuevo_profesor = profesor(
+            
+            exito = validar_y_registrar_profesor(
                 cuenta=cuenta,
                 nombre_completo=nombre_completo,
-                dias=dias_seleccionados, 
+                dias=dias_seleccionados,
                 hora_entrada=horario_inicio,
                 hora_salida=horario_fin,
                 linea=en_linea
