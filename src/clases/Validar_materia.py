@@ -5,6 +5,7 @@ import mysql.connector
 def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
     """
     Función que maneja la lógica de validación, INSERT y UPDATE para materias.
+    Permite actualizar todos los campos (nombre, horas, semestre) basados en el ID.
     """
     print(f"Iniciando registro/actualización para: {clave} - {nombre}...")
     conexion = None 
@@ -41,14 +42,16 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
             # --- Materia YA existe: Preguntar para actualizar ---
             nombre_db = resultado[0]
             
+            # Si el nombre nuevo es distinto al de la BD, se lo notificamos al usuario
             mensaje_confirmacion = (
-                f"La materia con clave '{clave}' ({nombre_db}) ya está registrada.\n\n"
-                f"¿Desea actualizarla con los nuevos datos?"
+                f"La materia con clave '{clave}' ya existe.\n\n"
+                f"Nombre actual: {nombre_db}\n"
+                f"Nombre nuevo: {nombre}\n\n"
+                f"¿Desea actualizar TODOS los datos de esta materia?"
             )
             
-            # Pedir confirmación al usuario (askyesno devuelve True/False)
             if messagebox.askyesno("Materia Existente", mensaje_confirmacion):
-                # El usuario confirmó la actualización
+                # ACTUALIZACIÓN: Ahora incluimos el nombre en el SET
                 sql_update = """
                     UPDATE materias 
                     SET nombre = %s,
@@ -56,16 +59,15 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
                         semestre_id = %s
                     WHERE materia_id = %s
                 """
-                # Se utiliza el ID numérico del semestre o None
+                # Los valores en el orden correcto para el SQL anterior
                 valores_update = (nombre, horas_semana_str, semestre_id, clave) 
                 
                 cursor.execute(sql_update, valores_update)
-                messagebox.showinfo("Actualización Exitosa", f"Actualización completa.")
+                messagebox.showinfo("Actualización Exitosa", f"Materia '{clave}' actualizada correctamente con el nombre: {nombre}")
                 transaccion_exitosa = True
                 return True
             else:
-                # El usuario canceló la actualización
-                messagebox.showinfo("Actualización Cancelada", f"Actualización cancelada.")
+                messagebox.showinfo("Actualización Cancelada", "No se realizaron cambios.")
                 return True
 
         else:
@@ -74,29 +76,24 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
                 INSERT INTO materias (materia_id, nombre, horas_semana, semestre_id) 
                 VALUES (%s, %s, %s, %s)
             """
-            # Se utiliza el ID numérico del semestre o None
             valores_insert = (clave, nombre, horas_semana_str, semestre_id)
             
             cursor.execute(sql_insert, valores_insert)
             
-            messagebox.showinfo("Éxito", f"Materia con la clave '{clave}' ({nombre}) guardada correctamente.")
+            messagebox.showinfo("Éxito", f"Materia '{nombre}' guardada correctamente con clave {clave}.")
             transaccion_exitosa = True
             return True
 
     except mysql.connector.Error as err:
-        # Manejo de errores de base de datos (ej. violación de FK, formato incorrecto)
-        messagebox.showerror("Error de BD", f"Error al procesar los datos de la materia: {err}")
+        messagebox.showerror("Error de BD", f"Error al procesar la materia: {err}")
         return False
             
     finally:
-        # Asegurar el COMMIT si la operación fue exitosa
         if transaccion_exitosa and conexion is not None:
             conexion.commit()
             print("Transacción finalizada con COMMIT.")
         
-        # Cerrar recursos
         if cursor is not None:
             cursor.close()
         if conexion is not None and conexion.is_connected():
             conexion.close()
-            print("Conexión cerrada.")
