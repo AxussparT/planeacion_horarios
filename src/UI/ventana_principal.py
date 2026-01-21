@@ -8,7 +8,9 @@ from src.UI.ventana_gestion import VentanaGestion
 from src.clases.validacion_bd import validar_y_registrar_profesor 
 from src.clases.profesor import profesor 
 from src.clases.materia import materia
-from src.clases.salon import salon # Restaurada la importación
+from src.clases.salon import salon 
+
+#python -m src.UI.ventana_principal
 
 class VentanaPrincipal:
     
@@ -101,7 +103,13 @@ class VentanaPrincipal:
         self.crear_label_entry("Nombre Materia", "entry_materia_nom")
         self.crear_label_entry("Horas Semana", "entry_materia_horas")
         self.crear_label_entry("Semestre", "entry_materia_semestre")
-        ttk.Button(self.frame_izquierdo_principal, text="Agregar Materia", command=self.evento_materias, style='Danger.TButton').pack(pady=10)
+        # --- CONTENEDOR DE BOTONES Materias ---
+        f_btns_materia = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
+        f_btns_materia.pack(pady=20)
+        ttk.Button(f_btns_materia, text="Agregar Materia", command=self.evento_materias, style='Danger.TButton').pack(side='left', padx=10)
+        
+        # Botón Eliminar 
+        ttk.Button(f_btns_materia, text="Eliminar", command=self.eliminar_materia, style='Danger.TButton').pack(side='left', padx=10)
 
         ttk.Separator(self.frame_izquierdo_principal, orient='horizontal').pack(fill='x', pady=20)
 
@@ -113,7 +121,14 @@ class VentanaPrincipal:
         self.combo_tipo = ttk.Combobox(self.frame_izquierdo_principal, width=25, font=("Roboto", 12), state='readonly')
         self.combo_tipo['values'] = ("Normal", "Tecnológica", "Laboratorio")
         self.combo_tipo.pack(pady=5)
-        ttk.Button(self.frame_izquierdo_principal, text="Agregar Salón", command=self.evento_Salones, style='Danger.TButton').pack(pady=10)
+        
+        # --- CONTENEDOR DE BOTONES del formulario salon ---
+        f_btns_salon = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
+        f_btns_salon.pack(pady=20) 
+        ttk.Button(f_btns_salon, text="Agregar Salon", command=self.evento_Salones, style='Danger.TButton').pack(side='left', padx=10)
+        
+        # Botón Eliminar
+        ttk.Button(f_btns_salon, text="Eliminar", command=self.eliminar_salon, style='Danger.TButton').pack(side='left', padx=10)
 
         # --- SECCIÓN DERECHA: TABLAS ---
         self.frame_derecho = ttk.Frame(self.frame_principal, style='blue.TFrame')
@@ -268,6 +283,64 @@ class VentanaPrincipal:
     def abrir_ventana_gestion(self):
         VentanaGestion(self.master)
 
+    def eliminar_salon(self):
+        aula_id = self.entry_num_aula.get().strip()
+
+        if not aula_id:
+            return
+        
+        if messagebox.askyesno("Confirmar Eliminación", f"¿Estás seguro de eliminar el aula {aula_id}?"):
+            conn = get_conexion()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM salones WHERE salon_id = %s", (aula_id,))
+
+                conn.commit()
+                
+                messagebox.showinfo("Éxito", "Salón eliminado correctamente.")
+                self.mostrar_datos_salones()
+                self.limpiar_campos_salon()
+
+            except Exception as e:
+                conn.rollback()
+                messagebox.showerror("Error de Base de Datos", str(e))
+            
+            finally:conn.close()
+    
+    def limpiar_campos_salon(self):
+        # Lógica para limpiar los campos
+        self.entry_num_aula.delete(0, tk.END)
+        self.entry_capacidad_aula.delete(0, tk.END)
+        self.combo_tipo.set("")
+
+    def eliminar_materia(self):
+        materia_id = self.entry_materia_clave.get().strip()
+        if not materia_id:
+            return
+
+        if messagebox.askyesno("Confirmar Eliminación", f"¿Estás seguro de eliminar la materia con clave '{materia_id}'?"):
+            conn = get_conexion()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM asignaciones WHERE materia_id = %s", (materia_id,))
+                cur.execute("DELETE FROM materias WHERE materia_id = %s", (materia_id,))
+                conn.commit()
+                messagebox.showinfo("Éxito", "Materia eliminada correctamente.")
+                self.mostrar_datos_materias()
+                self.limpiar_campos_materia()
+
+            except Exception as e:
+                conn.rollback()
+                messagebox.showerror("Error de Base de Datos", str(e))
+            
+            finally:conn.close()
+
+    def limpiar_campos_materia(self):
+        self.entry_materia_clave.delete(0, tk.END)
+        self.entry_materia_nom.delete(0, tk.END)
+        self.entry_materia_horas.delete(0, tk.END)
+        self.entry_materia_semestre.delete(0, tk.END)
+
     def redimensionar_fondo(self, event):
         if event.widget is self.master:
             if event.width != self._last_width or event.height != self._last_height:
@@ -275,6 +348,8 @@ class VentanaPrincipal:
                 img = self.original_image.resize((event.width, event.height), Image.LANCZOS)
                 self.bg_img = ImageTk.PhotoImage(img)
                 self.background_label.config(image=self.bg_img)
+
+    
 
 if __name__ == "__main__":
     root = tk.Tk()
