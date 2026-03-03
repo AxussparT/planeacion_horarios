@@ -5,6 +5,15 @@ import mysql.connector
 from src.conexion import get_conexion
 from src.motor_horarios import GeneradorHorarios
 
+# importaciones nuevas
+import datetime
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+#from src.clases.memoria_Horario_Grafico import tensor, n_salones, intervalos, n_columnas
+#importaciones nuevas
+from src.clases.memoria_Horario_Grafico import tensor, n_salones, intervalos, n_columnas, inicializar_y_llenar_tensor
+from matplotlib.patches import Rectangle
+
 class VentanaGestion:
     def __init__(self, master_window):
         # 1. Configuración inicial de la ventana
@@ -37,6 +46,12 @@ class VentanaGestion:
             "8": ["S8A", "S8B", "S8C"],
             "9": ["S9A", "S9B", "S9C"]
         }
+
+        # MANDATORIO: Llenar el tensor con datos reales antes de crear los widgets
+        try:
+            inicializar_y_llenar_tensor()
+        except Exception as e:
+            print(f"Error al precargar el tensor: {e}")
 
         # 4. Construcción de la Interfaz Gráfica
         self.construir_interfaz()
@@ -74,6 +89,9 @@ class VentanaGestion:
         
         self.notebook.add(self.pes0, text='Gestionar')
         self.notebook.add(self.pes1, text='Ver Horarios')
+
+        # LLAMADA A LA NUEVA FUNCIÓN
+        self.Construccion_Ver_Horarios(self.pes1)
 
         # --- Contenedor Superior (Gestión) ---
         frame_contenedor = ttk.Frame(self.pes0, style='blue.TFrame')
@@ -426,6 +444,144 @@ class VentanaGestion:
             cursor.close()
             conexion.close()
 
+    def Construccion_Ver_Horarios(self, contenedor):
+        self.s_idx = 0 
+        
+        # 1. Contenedor del gráfico que permite expansión
+        self.frame_grafico_display = ttk.Frame(contenedor)
+        self.frame_grafico_display.pack(fill='both', expand=True)
+
+        # 2. Crear la figura con un tamaño inicial, pero permitiendo que el Canvas la estire
+        # Quitamos el figsize rígido o lo ponemos pequeño para que Tkinter mande
+        self.fig = Figure(dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.fig.patch.set_facecolor('#0A0F1E') 
+        
+        # 3. Integración con Tkinter
+        self.canvas_horario = FigureCanvasTkAgg(self.fig, master=self.frame_grafico_display)
+        widget_canvas = self.canvas_horario.get_tk_widget()
+        
+        # CRÍTICO: fill='both' y expand=True para que siga el tamaño de la ventana
+        widget_canvas.pack(fill='both', expand=True)
+
+        # Panel de botones fijo abajo
+        frame_controles = ttk.Frame(contenedor, style='blue.TFrame')
+        frame_controles.pack(fill='x', side='bottom', pady=5)
+
+        ttk.Button(frame_controles, text="◀ Anterior", command=self.anterior_salon).pack(side='left', padx=50)
+        ttk.Button(frame_controles, text="Siguiente ▶", command=self.siguiente_salon).pack(side='left')
+        ttk.Button(frame_controles, text="Descargar PNG", command=self.guardar_captura).pack(side='right', padx=50)
+
+        self.actualizar_tabla_grafica()
+
+    def actualizar_tabla_grafica(self):
+        # 1. Limpieza y configuración inicial
+        self.ax.clear()
+        self.ax.axis('off')
+
+        # 2. Proporciones de columnas (7 columnas: Hora + Lunes-Sábado)
+        time_col_w = 0.15 
+        day_col_w = (1.0 - time_col_w) / 6 
+        col_widths = [time_col_w] + [day_col_w] * 6
+
+        # 3. Alturas
+        num_horarios = intervalos - 1 
+        header_h = 0.08 
+        grid_area_h = 1.0 - header_h
+        interval_h = grid_area_h / num_horarios 
+        
+        # --- CORRECCIÓN CRÍTICA DEL TÍTULO ---
+        from src.clases.memoria_Horario_Grafico import salones_num  # Aseguramos acceso a la matriz global
+        
+        titulo_texto = f"HORARIO - {tensor[self.s_idx, 0, 0]}" # Fallback por defecto
+        
+        if salones_num:
+            try:
+                # Buscamos el ID real que coincide con el índice actual (self.s_idx)
+                # La matriz tiene el formato [[id_salon, s_idx], ...]
+                id_real = next(s[0] for s in salones_num if s[1] == self.s_idx)
+                titulo_texto = f"HORARIO - {id_real}"
+            except StopIteration:
+                # Si no encuentra el índice en la matriz, mantiene el nombre del tensor
+                pass
+        
+        self.ax.set_title(titulo_texto, color="white", pad=10, fontsize=12, fontweight='bold')
+
+        # 4. DIBUJO DE ENCABEZADOS (Días)
+        day_names = ['Hora', 'Lunes', 'Martes', 'Miér', 'Juev', 'Vier', 'Sáb']
+        x_curr = 0.0
+        for i, name in enumerate(day_names):
+            self.ax.add_patch(Rectangle((x_curr, 1.0 - header_h), col_widths[i], header_h, 
+                                      facecolor='#2f4a23', edgecolor='white', linewidth=1, zorder=5))
+            self.ax.text(x_curr + col_widths[i]/2, 1.0 - header_h/2, name,
+                        ha='center', va='center', fontweight='bold', color='white', fontsize=10, zorder=6)
+            x_curr += col_widths[i]
+
+        # 5. CUADRÍCULA DE FONDO (Casillas blancas estéticas)
+        x_grid = 0.0
+        for col_idx in range(7):
+            y_grid = 1.0 - header_h
+            for row_idx in range(1, intervalos):
+                y_pos = y_grid - interval_h
+                bg_color = '#1a1a1a' if col_idx == 0 else 'white'
+                self.ax.add_patch(Rectangle((x_grid, y_pos), col_widths[col_idx], interval_h, 
+                                          facecolor=bg_color, edgecolor='black', linewidth=0.5, zorder=1))
+                
+                if col_idx == 0: # Texto de horas (Fila 1 = 7:00-7:30)
+                    self.ax.text(x_grid + col_widths[col_idx]/2, y_pos + interval_h/2, 
+                                tensor[self.s_idx, row_idx, 0],
+                                ha='center', va='center', color='white', fontsize=8, zorder=2)
+                y_grid -= interval_h
+            x_grid += col_widths[col_idx]
+
+        # 6. DIBUJO DE MATERIAS (Sincronizado y sin desfase)
+        x_materia = col_widths[0] 
+        for col_idx in range(1, 7):
+            r_ptr = 1 
+            while r_ptr < intervalos:
+                materia = tensor[self.s_idx, r_ptr, col_idx]
+                
+                if materia != "" and materia is not None:
+                    inicio_r = r_ptr
+                    while (r_ptr + 1 < intervalos and tensor[self.s_idx, r_ptr + 1, col_idx] == materia):
+                        r_ptr += 1
+                    
+                    num_celdas = r_ptr - inicio_r + 1
+                    h_bloque = num_celdas * interval_h
+                    
+                    # Cálculo de posición Y ajustado
+                    y_base_area = 1.0 - header_h
+                    y_pos_materia = y_base_area - (r_ptr) * interval_h
+                    
+                    # Cuadro blanco sólido de la materia
+                    self.ax.add_patch(Rectangle((x_materia, y_pos_materia), col_widths[col_idx], h_bloque,
+                                              facecolor='white', edgecolor='black', linewidth=1.2, zorder=3))
+                    
+                    # Texto centrado y con ajuste de línea (Wrapping)
+                    t = self.ax.text(x_materia + col_widths[col_idx]/2, y_pos_materia + h_bloque/2, materia,
+                                   ha='center', va='center', fontsize=8, fontweight='bold',
+                                   color='black', wrap=True, zorder=4)
+                    t._get_wrap_line_width = lambda: 70 
+                    
+                r_ptr += 1
+            x_materia += col_widths[col_idx]
+
+        # 7. Refrescar el canvas
+        self.fig.tight_layout(pad=0)
+        self.canvas_horario.draw()
+
+    def siguiente_salon(self):
+        self.s_idx = (self.s_idx + 1) % n_salones
+        self.actualizar_tabla_grafica()
+
+    def anterior_salon(self):
+        self.s_idx = (self.s_idx - 1) % n_salones
+        self.actualizar_tabla_grafica()
+
+    def guardar_captura(self):
+        nombre = f"Horario_S{self.s_idx + 1}_{datetime.datetime.now().strftime('%H%M%S')}.png"
+        self.fig.savefig(nombre, bbox_inches='tight', dpi=200)
+        
     def actualizar_vista_previa(self, event=None):
         # Usamos la función auxiliar para limpiar IDs y evitar errores con "sin grupos..."
         prof_id = self._obtener_id_valido(self.combo_profesores.get())
