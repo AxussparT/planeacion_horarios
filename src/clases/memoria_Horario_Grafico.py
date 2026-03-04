@@ -1,17 +1,17 @@
 import numpy as np
 import mysql.connector
 from src.conexion import get_conexion
+import textwrap
 
 # --- CONFIGURACIÓN GLOBAL ---
 n_salones = 10  
-intervalos = 30 
+intervalos = 23
 n_columnas = 8  
 
 # Creación del tensor con el nombre original
 tensor = np.full((n_salones, intervalos, n_columnas), "", dtype='object')
 
-# MATRIZ GLOBAL DE SALONES (Accesible desde cualquier módulo)
-# Contendrá pares: [[id_salon, numero_asignado], ...]
+# MATRIZ GLOBAL DE SALONES
 salones_num = []
 
 def obtener_datos_servidor():
@@ -24,24 +24,39 @@ def obtener_datos_servidor():
     mapeo_dias = {"Lunes": 1, "Martes": 2, "Miércoles": 3, "Jueves": 4, "Viernes": 5, "Sábado": 6}
 
     try:
-        # Consulta de Salones
-        cursor.execute("SELECT salon_id FROM salones")
+        cursor.execute("SELECT salon_id FROM salones ORDER BY salon_id")
         regs_salones = cursor.fetchall()
-        
-        # Diccionario para mapeo interno
         dict_salones = {reg[0]: i for i, reg in enumerate(regs_salones)}
 
-        # Consulta de Materias
+        # --- MEJORA: LIMPIEZA Y FORMATO DE TEXTO ---
         query_m = """
-            SELECT h.asignacion_id, m.nombre 
-            FROM horarios h
-            JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
+            SELECT a.asignacion_id, m.nombre AS materia, p.nombre AS profesor, a.grupo_id
+            FROM asignaciones a
             JOIN materias m ON a.materia_id = m.materia_id
+            JOIN profesores p ON a.profesor_id = p.profesor_id
         """
         cursor.execute(query_m)
-        dict_materias = {reg[0]: reg[1] for reg in cursor.fetchall()}
+        
+        dict_materias = {}
+        for reg in cursor.fetchall():
+            asig_id, m_nom, p_nom, g_id = reg
+            
+            # 1. Abreviar la materia si es muy larga (ej. máximo 20 caracteres)
+            mat_corta = textwrap.shorten(m_nom, width=22, placeholder="...")
+            
+            # 2. Limpiar el nombre del profe (Truco: tomar solo las últimas 3 palabras para saltar los títulos)
+            partes_nombre = p_nom.split()
+            if len(partes_nombre) > 3:
+                # "DR. EN C. YANET HERNANDEZ" -> se convierte en "YANET HERNANDEZ"
+                prof_limpio = " ".join(partes_nombre[-3:])
+            else:
+                prof_limpio = p_nom
+                
+            # 3. Formatear la celda con el texto más limpio
+            texto_celda = f"{mat_corta}\n {prof_limpio}\n{g_id}"
+            dict_materias[asig_id] = texto_celda
 
-        # Consulta de Horarios
+        # Consulta de Horarios (El resto sigue igual...)
         cursor.execute("SELECT horario_id, asignacion_id, salon_id, dia, hora_inicio, hora_fin FROM horarios")
         verdadero_horario = []
         for reg in cursor.fetchall():
@@ -73,7 +88,7 @@ def inicializar_y_llenar_tensor():
     tensor.fill("") 
     salones_num = [] 
     
-    # Obtención de datos
+    # Obtención de datos frescos de la BD
     datos_clases, salones_info = obtener_datos_servidor()
 
     # 1. Inicializar etiquetas y matriz global
@@ -82,37 +97,27 @@ def inicializar_y_llenar_tensor():
             salones_num.append([s_id, s_idx])
             
             # Fila 0: Encabezado del Salón
-            tensor[s_idx, 0, 0] = f"SALÓN {s_idx}" 
+            tensor[s_idx, 0, 0] = f"SALÓN {s_id}"  # Cambiado para mostrar el nombre real del salón (ej. f19)
             
             # --- AJUSTE DE ETIQUETAS DE RANGO ---
             hora_actual = 7.0
             for f in range(1, intervalos):
-                # Calcular hora de inicio
                 h_i = int(hora_actual)
                 m_i = "30" if (hora_actual % 1 != 0) else "00"
                 
-                # Calcular hora de fin (sumando 30 min)
                 hora_siguiente = hora_actual + 0.5
                 h_f = int(hora_siguiente)
                 m_f = "30" if (hora_siguiente % 1 != 0) else "00"
                 
-                # Guardar el rango completo en la primera columna
                 tensor[s_idx, f, 0] = f"{h_i}:{m_i} - {h_f}:{m_f}"
-                
                 hora_actual = hora_siguiente
 
-    # 2. Llenado de materias (mantenemos la lógica que ya te funcionaba)
+    # 2. Llenado de materias con el nuevo formato completo
     for clase in datos_clases:
-        nombre_materia, s_idx, dia_col, h_ini, h_fin, _ = clase
+        texto_celda, s_idx, dia_col, h_ini, h_fin, _ = clase
         
         for fila_hora in range(h_ini, h_fin):
             if s_idx < n_salones and fila_hora < intervalos:
-                tensor[s_idx, fila_hora, dia_col] = nombre_materia
+                tensor[s_idx, fila_hora, dia_col] = texto_celda
 
-    print("Sincronización exitosa: Horas mostradas como rangos (inicio - fin).")
-
-# Ejecución inicial
-if __name__ == "__main__":
-    inicializar_y_llenar_tensor()
-    print("Sincronización completa.")
-    print(f"Matriz Global de Salones: {salones_num}")
+    print("Sincronización exitosa: Tensor actualizado con datos completos.")

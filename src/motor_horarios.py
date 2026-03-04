@@ -9,16 +9,18 @@ class GeneradorHorarios:
         
         self.HORA_INICIO_CLASES = 7 
         self.MINUTOS_BLOQUE = 30
-        self.SLOTS_DIARIOS = 30 
+        self.SLOTS_DIARIOS = 29 
         
         self.ocupacion_salones = {} 
         self.ocupacion_profesores = {} 
         self.ocupacion_grupos = {}     
+        self.uso_salones = {} 
 
     def _limpiar_matrices(self):
         self.ocupacion_salones = {}
         self.ocupacion_profesores = {}
         self.ocupacion_grupos = {}
+        self.uso_salones = {salon: 0 for salon in self.salones}
 
     def _hora_a_slot(self, hora_time):
         if isinstance(hora_time, datetime.timedelta):
@@ -47,11 +49,10 @@ class GeneradorHorarios:
         return f"{horas:02d}:{minutos:02d}:00"
 
     def cargar_datos(self):
-        # CAMBIO: Añadimos el JOIN con materias para traer m.horas_semana
         sql_asignaciones = """
             SELECT a.asignacion_id, a.profesor_id, a.materia_id, a.grupo_id, 
                    p.disponible_inicio, p.disponible_fin, p.dias_disponibles,
-                   IFNULL(m.horas_semana, 4) as horas_semana -- Por si viene NULL, asumimos 4
+                   IFNULL(m.horas_semana, 4) as horas_semana
             FROM asignaciones a
             JOIN profesores p ON a.profesor_id = p.profesor_id
             JOIN materias m ON a.materia_id = m.materia_id
@@ -98,9 +99,38 @@ class GeneradorHorarios:
             self.ocupacion_salones[(dia, salon_id, slot)] = True
             self.ocupacion_profesores[(dia, prof_id, slot)] = True
             self.ocupacion_grupos[(dia, grupo_id, slot)] = True
+            
+        self.uso_salones[salon_id] += duracion_bloques
+
+    # --- NUEVO MÉTODO: Intenta forzar la misma hora para todos los días ---
+    def intentar_asignar_estrategia_simetrica(self, asignacion, estrategia, salon, horarios_generados):
+        """Busca un único slot de inicio que esté disponible para todos los días de la estrategia."""
+        for slot_inicio in range(self.SLOTS_DIARIOS):
+            posible_todos = True
+            
+            # Verificamos si la MISMA hora exacta está libre para Lunes y para Miércoles
+            for dia, duracion_bloques in estrategia:
+                if not self.es_posible_asignar(asignacion, dia, slot_inicio, duracion_bloques, salon):
+                    posible_todos = False
+                    break
+            
+            if posible_todos:
+                # Si caben simétricamente, los registramos
+                for dia, duracion_bloques in estrategia:
+                    self.registrar_ocupacion(asignacion, dia, slot_inicio, duracion_bloques, salon)
+                    horario = {
+                        "asignacion_id": asignacion['asignacion_id'], 
+                        "salon_id": salon,
+                        "dia": dia,
+                        "hora_inicio": self._slot_a_hora(slot_inicio),
+                        "hora_fin": self._slot_a_hora(slot_inicio + duracion_bloques)
+                    }
+                    horarios_generados.append(horario)
+                return True
+                
+        return False
 
     def intentar_asignar_bloque(self, asignacion, dia, duracion_bloques, salon, horarios_generados):
-        """Intenta colocar un bloque de horas en un día y salón específicos"""
         for slot in range(self.SLOTS_DIARIOS):
             if self.es_posible_asignar(asignacion, dia, slot, duracion_bloques, salon):
                 self.registrar_ocupacion(asignacion, dia, slot, duracion_bloques, salon)
@@ -112,7 +142,7 @@ class GeneradorHorarios:
                     "hora_fin": self._slot_a_hora(slot + duracion_bloques)
                 }
                 horarios_generados.append(horario)
-                return True # Éxito
+                return True
         return False
 
     def ejecutar(self):
@@ -121,65 +151,73 @@ class GeneradorHorarios:
         
         horarios_generados = []
         
-        print(f"--- Encontradas {len(self.asignaciones)} asignaciones para procesar ---")
+        self.asignaciones.sort(key=lambda x: float(x.get('horas_semana', 0)), reverse=True)
 
         for asignacion in self.asignaciones:
-            # 1 hora = 2 bloques de 30 mins
             horas_totales = float(asignacion['horas_semana'])
             bloques_totales = int(horas_totales * 2) 
             
-            # ESTRATEGIAS DE DIVISIÓN
             if bloques_totales >= 6:
-                # Partimos las horas a la mitad. Ej: 5 horas -> 3h y 2h.
-                '''
-                horas_dia1 = math.ceil(horas_totales / 2)
-                horas_dia2 = horas_totales - horas_dia1
-                '''
-                bloques_dia1 = math.ceil(bloques_totales/2)
-                bloques_dia2 = bloques_totales-bloques_dia1
+                b_mitad1 = math.ceil(bloques_totales/2)
+                b_mitad2 = bloques_totales - b_mitad1
+                
+                b_mayor = 4 if bloques_totales == 6 else b_mitad1
+                b_menor = 2 if bloques_totales == 6 else b_mitad2
                 
                 estrategias = [
-                    # Estrategia 1: Lunes y Miércoles
-                    [("Lunes", bloques_dia1), ("Miércoles", bloques_dia2)],
-                    # Estrategia 2: Martes y Jueves
-                    [("Martes", bloques_dia1), ("Jueves", bloques_dia2)],
-                    # Estrategia 3: Todo junto en un solo día (Fallback)
-                    [("Viernes", bloques_totales)],
-                    [("Lunes", bloques_totales)]
+                    [("Lunes", b_mitad1), ("Miércoles", b_mitad2)],
+                    [("Martes", b_mitad1), ("Jueves", b_mitad2)],
+                    [("Miércoles", b_mitad1), ("Viernes", b_mitad2)],
+                    [("Lunes", b_mitad1), ("Jueves", b_mitad2)],
+                    [("Martes", b_mitad1), ("Viernes", b_mitad2)],
+                    [("Lunes", b_mayor), ("Miércoles", b_menor)],
+                    [("Martes", b_mayor), ("Jueves", b_menor)],
+                    [("Lunes", b_menor), ("Miércoles", b_mayor)],
+                    [("Martes", b_menor), ("Jueves", b_mayor)],
+                    [("Lunes", bloques_totales)], [("Martes", bloques_totales)], 
+                    [("Miércoles", bloques_totales)], [("Jueves", bloques_totales)], [("Viernes", bloques_totales)]
                 ]
             else:
-                # Materias de 1 o 2 horas se asignan juntas un solo día
                 estrategias = [
                     [("Lunes", bloques_totales)], [("Martes", bloques_totales)], 
                     [("Miércoles", bloques_totales)], [("Jueves", bloques_totales)], [("Viernes", bloques_totales)]
                 ]
 
             asignado_completamente = False
+            salones_ordenados = sorted(self.salones, key=lambda s: self.uso_salones.get(s, 0))
             
-            # Buscar salón disponible para aplicar la estrategia
-            for salon in self.salones:
+            # --- FASE 1: BÚSQUEDA ESTRICTA SIMÉTRICA ---
+            for salon in salones_ordenados:
                 if asignado_completamente: break
-                
                 for estrategia in estrategias:
-                    exito_estrategia = True
                     horarios_temporales = []
-                    
-                    # Intentar acomodar todas las partes de esta estrategia
-                    for dia, bloques_requeridos in estrategia:
-                        exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon, horarios_temporales)
-                        if not exito_bloque:
-                            exito_estrategia = False
-                            break # Falla un día de la estrategia, se cancela esta estrategia completa
-                    
-                    if exito_estrategia:
-                        # La estrategia funcionó, guardamos los horarios
+                    # Intentamos que empiecen exactamente a la misma hora
+                    if self.intentar_asignar_estrategia_simetrica(asignacion, estrategia, salon, horarios_temporales):
                         horarios_generados.extend(horarios_temporales)
                         asignado_completamente = True
-                        break 
-                    else:
-                        # Rollback: Des-ocupar si la estrategia falló a medias (ej. pudo el Lunes pero no el Miércoles)
-                        for ht in horarios_temporales:
-                            self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
+                        break
+
+            # --- FASE 2: RESPALDO ASIMÉTRICO (Si falló la simetría) ---
+            if not asignado_completamente:
+                for salon in salones_ordenados:
+                    if asignado_completamente: break
+                    for estrategia in estrategias:
+                        exito_estrategia = True
+                        horarios_temporales = []
+                        
+                        for dia, bloques_requeridos in estrategia:
+                            exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon, horarios_temporales)
+                            if not exito_bloque:
+                                exito_estrategia = False
+                                break 
+                        
+                        if exito_estrategia:
+                            horarios_generados.extend(horarios_temporales)
+                            asignado_completamente = True
+                            break 
+                        else:
+                            for ht in horarios_temporales:
+                                self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
             if not asignado_completamente:
                 print(f"ALERTA: No se pudo asignar ID {asignacion['asignacion_id']} ({horas_totales} hrs)")
@@ -188,7 +226,6 @@ class GeneradorHorarios:
         return len(horarios_generados)
 
     def _deshacer_ocupacion(self, asignacion, dia, slot_inicio, salon_id, duracion_bloques):
-        """Función auxiliar para limpiar la ocupación si una estrategia falla a la mitad"""
         prof_id = asignacion['profesor_id']
         grupo_id = asignacion['grupo_id']
         for i in range(duracion_bloques):
@@ -196,6 +233,8 @@ class GeneradorHorarios:
             if (dia, salon_id, slot) in self.ocupacion_salones: del self.ocupacion_salones[(dia, salon_id, slot)]
             if (dia, prof_id, slot) in self.ocupacion_profesores: del self.ocupacion_profesores[(dia, prof_id, slot)]
             if (dia, grupo_id, slot) in self.ocupacion_grupos: del self.ocupacion_grupos[(dia, grupo_id, slot)]
+        
+        self.uso_salones[salon_id] -= duracion_bloques
 
     def guardar_en_bd(self, lista_horarios):
         try:

@@ -77,7 +77,7 @@ class VentanaPrincipal:
         
         ttk.Label(self.frame_izquierdo_principal, text="¿En línea?:", style='fondo.TLabel').pack()
         self.combo_linea = ttk.Combobox(self.frame_izquierdo_principal, width=25, font=("Roboto", 12), state='readonly')
-        self.combo_linea['values'] = ("Sí", "No")
+        self.combo_linea['values'] = ("Sí", "No","Ambos")
         self.combo_linea.pack(pady=5)
         
         ttk.Label(self.frame_izquierdo_principal, text="Horario (Inicio - Fin):", style='fondo.TLabel').pack()
@@ -204,10 +204,34 @@ class VentanaPrincipal:
 
     def evento_boton_profesores(self):
         self.entry_no_cuenta.config(state='normal')
-        c = self.entry_no_cuenta.get()
+        cuenta_base = self.entry_no_cuenta.get().strip()
         full_n = f"{self.entry_nombre.get()} {self.entry_apellido.get()}".strip()
-        if validar_y_registrar_profesor(c, full_n, self.dias_seleccionados, self.entry_horario_i.get(), self.entry_horario_f.get(), self.combo_linea.get()):
-            self.mostrar_datos_profesor(); self.limpiar_campos_profesor()
+        opcion_linea = self.combo_linea.get()
+
+        if not cuenta_base:
+            messagebox.showwarning("Aviso", "El número de cuenta es obligatorio.")
+            return
+
+        exito = False
+
+        # 1. Registro Presencial (Si elige 'No' o 'Ambos')
+        if opcion_linea in ["No", "Ambos"]:
+            if validar_y_registrar_profesor(cuenta_base, full_n, self.dias_seleccionados, self.entry_horario_i.get(), self.entry_horario_f.get(), "No"):
+                exito = True
+
+        # 2. Registro En Línea (Si elige 'Sí' o 'Ambos')
+        if opcion_linea in ["Sí", "Ambos"]:
+            # Agregamos el sufijo '-L' para la BD (ej. P015 se vuelve P015-L)
+            # Evitamos duplicar el sufijo si el usuario ya está editando un perfil con "-L"
+            cuenta_linea = cuenta_base if cuenta_base.endswith("-L") else f"{cuenta_base}-L"
+            
+            if validar_y_registrar_profesor(cuenta_linea, full_n, self.dias_seleccionados, self.entry_horario_i.get(), self.entry_horario_f.get(), "Sí"):
+                exito = True
+
+        # Actualizar tabla y limpiar si al menos un registro fue exitoso
+        if exito:
+            self.mostrar_datos_profesor()
+            self.limpiar_campos_profesor()
 
     def eliminar_profesor(self):
         self.entry_no_cuenta.config(state='normal')

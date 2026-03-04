@@ -241,7 +241,8 @@ class VentanaGestion:
             
             messagebox.showinfo("exito",f"se generaron {cantidad}horarios correctamente")
             #---------aplicar cuando se desarrolle la interfaz de los horarios
-            #self.notebook.select(self.pes1)
+            self.notebook.select(self.pes1)
+            inicializar_y_llenar_tensor()
         except Exception as e:
             messagebox.showerror("error critico",f"fallo la generacion de horarios ")
             print(e)
@@ -249,15 +250,41 @@ class VentanaGestion:
             conexion.close()
             
             
-    def cargar_grupos_por_semestre(self, semestre_id):
+    def cargar_grupos_por_semestre(self, semestre_id, materia_id=None):
         semestre_id = str(semestre_id)
-        grupos = self.grupos_por_semestre.get(semestre_id, [])
-        self.combo_grupos['values'] = grupos
-        if grupos:
-            self.combo_grupos.set(grupos[0])
+        # Obtenemos la lista original de grupos para ese semestre
+        grupos_base = self.grupos_por_semestre.get(semestre_id, [])
+        grupos_filtrados = grupos_base.copy()
+
+        # Si hay una materia seleccionada, consultamos quién ya la tiene
+        if materia_id:
+            conexion = get_conexion()
+            if conexion:
+                try:
+                    cursor = conexion.cursor()
+                    cursor.execute("SELECT grupo_id FROM asignaciones WHERE materia_id = %s", (materia_id,))
+                    # Obtenemos los grupos que ya están ocupados con esta materia
+                    grupos_ocupados = [row[0] for row in cursor.fetchall()]
+                    
+                    # Filtramos la lista eliminando los ocupados
+                    grupos_filtrados = [g for g in grupos_base if g not in grupos_ocupados]
+                except mysql.connector.Error as err:
+                    print(f"Error filtrando grupos: {err}")
+                finally:
+                    cursor.close()
+                    conexion.close()
+
+        # Actualizamos el combobox con los grupos que pasaron el filtro
+        self.combo_grupos['values'] = grupos_filtrados
+        
+        if grupos_filtrados:
+            self.combo_grupos.set(grupos_filtrados[0])
         else:
             self.combo_grupos.set("")
-            self.combo_grupos.set("sin grupos cargados")
+            if grupos_base:
+                self.combo_grupos.set("Grupos llenos para esta materia")
+            else:
+                self.combo_grupos.set("sin grupos cargados")
 
     def cargar_combos_bd(self):
         conexion = get_conexion()
@@ -351,7 +378,10 @@ class VentanaGestion:
             self.combo_materias['values'] = mat_filtradas
             self.combo_materias.set(mat_filtradas[0] if mat_filtradas else "sin materias cargadas")
             
-            self.cargar_grupos_por_semestre(id_sem)
+            # Obtenemos el ID de la materia que se acaba de auto-seleccionar
+            materia_id = self._obtener_id_valido(self.combo_materias.get())
+            
+            self.cargar_grupos_por_semestre(id_sem, materia_id)
         except ValueError:
             pass
 
@@ -366,9 +396,11 @@ class VentanaGestion:
         if semestre_id:
             texto_sem = self.semestres_map.get(str(semestre_id))
             self.combo_semestre.set(texto_sem if texto_sem else "Desconocido")
-            self.cargar_grupos_por_semestre(semestre_id)
+            # AQUÍ pasamos tanto el semestre como la materia para filtrar
+            self.cargar_grupos_por_semestre(semestre_id, materia_id)
         else:
             self.combo_semestre.set("No Asignado")
+            self.combo_grupos.set("")
 
     def obtener_o_crear_grupo(self, grupo_texto):
         grupo_texto = grupo_texto.strip().upper()
@@ -475,6 +507,113 @@ class VentanaGestion:
         self.actualizar_tabla_grafica()
 
     def actualizar_tabla_grafica(self):
+        # 1. Limpieza y configuración inicial
+        self.ax.clear()
+        self.ax.axis('off')
+
+        # 2. Proporciones de columnas (7 columnas: Hora + Lunes-Sábado)
+        time_col_w = 0.15 
+        day_col_w = (1.0 - time_col_w) / 6 
+        col_widths = [time_col_w] + [day_col_w] * 6
+
+        # 3. Alturas
+        num_horarios = intervalos - 1 
+        header_h = 0.08 
+        grid_area_h = 1.0 - header_h
+        interval_h = grid_area_h / num_horarios 
+        
+        # --- CORRECCIÓN CRÍTICA DEL TÍTULO ---
+        from src.clases.memoria_Horario_Grafico import salones_num  # Aseguramos acceso a la matriz global
+        
+        titulo_texto = f"HORARIO - {tensor[self.s_idx, 0, 0]}" # Fallback por defecto
+        
+        if salones_num:
+            try:
+                # Buscamos el ID real que coincide con el índice actual (self.s_idx)
+                # La matriz tiene el formato [[id_salon, s_idx], ...]
+                id_real = next(s[0] for s in salones_num if s[1] == self.s_idx)
+                titulo_texto = f"HORARIO - {id_real}"
+            except StopIteration:
+                # Si no encuentra el índice en la matriz, mantiene el nombre del tensor
+                pass
+        
+        self.ax.set_title(titulo_texto, color="white", pad=10, fontsize=12, fontweight='bold')
+
+        # 4. DIBUJO DE ENCABEZADOS (Días)
+        day_names = ['Hora', 'Lunes', 'Martes', 'Miér', 'Juev', 'Vier', 'Sáb']
+        x_curr = 0.0
+        for i, name in enumerate(day_names):
+            self.ax.add_patch(Rectangle((x_curr, 1.0 - header_h), col_widths[i], header_h, 
+                                      facecolor='#2f4a23', edgecolor='white', linewidth=1, zorder=5))
+            self.ax.text(x_curr + col_widths[i]/2, 1.0 - header_h/2, name,
+                        ha='center', va='center', fontweight='bold', color='white', fontsize=10, zorder=6)
+            x_curr += col_widths[i]
+
+        # 5. CUADRÍCULA DE FONDO (Casillas blancas estéticas)
+        x_grid = 0.0
+        for col_idx in range(7):
+            y_grid = 1.0 - header_h
+            for row_idx in range(1, intervalos):
+                y_pos = y_grid - interval_h
+                bg_color = '#1a1a1a' if col_idx == 0 else 'white'
+                self.ax.add_patch(Rectangle((x_grid, y_pos), col_widths[col_idx], interval_h, 
+                                          facecolor=bg_color, edgecolor='black', linewidth=0.5, zorder=1))
+                
+                if col_idx == 0: # Texto de horas (Fila 1 = 7:00-7:30)
+                    self.ax.text(x_grid + col_widths[col_idx]/2, y_pos + interval_h/2, 
+                                tensor[self.s_idx, row_idx, 0],
+                                ha='center', va='center', color='white', fontsize=8, zorder=2)
+                y_grid -= interval_h
+            x_grid += col_widths[col_idx]
+
+        # 6. DIBUJO DE MATERIAS (Sincronizado y sin desfase)
+        x_materia = col_widths[0] 
+        import textwrap # <-- Aseguramos la importación aquí para que funcione
+        
+        for col_idx in range(1, 7):
+            r_ptr = 1 
+            while r_ptr < intervalos:
+                materia = tensor[self.s_idx, r_ptr, col_idx]
+                
+                if materia != "" and materia is not None:
+                    inicio_r = r_ptr
+                    while (r_ptr + 1 < intervalos and tensor[self.s_idx, r_ptr + 1, col_idx] == materia):
+                        r_ptr += 1
+                    
+                    num_celdas = r_ptr - inicio_r + 1
+                    h_bloque = num_celdas * interval_h
+                    
+                    # Cálculo de posición Y ajustado
+                    y_base_area = 1.0 - header_h
+                    y_pos_materia = y_base_area - (r_ptr) * interval_h
+                    
+                    # Cuadro blanco sólido de la materia
+                    self.ax.add_patch(Rectangle((x_materia, y_pos_materia), col_widths[col_idx], h_bloque,
+                                              facecolor='white', edgecolor='black', linewidth=1.2, zorder=3))
+                    
+                    # --- MEJORA: AJUSTE DE TEXTO Y TAMAÑO ---
+                    # Separamos el texto que viene de la BD (Materia, Prof, Grupo)
+                    lineas_originales = materia.split('\n')
+                    lineas_ajustadas = []
+                    
+                    for linea in lineas_originales:
+                        # Si una línea tiene más de 16 caracteres, la divide en dos renglones
+                        lineas_ajustadas.append(textwrap.fill(linea, width=15))
+                        
+                    # Volvemos a unir todo el texto
+                    texto_final = '\n'.join(lineas_ajustadas)
+                    
+                    # Dibujamos el texto (Redujimos fontsize a 6.5)
+                    self.ax.text(x_materia + col_widths[col_idx]/2, y_pos_materia + h_bloque/2, texto_final,
+                               ha='center', va='center', fontsize=6.5, fontweight='bold',
+                               color='black', zorder=4)
+                    
+                r_ptr += 1
+            x_materia += col_widths[col_idx]
+
+        # 7. Refrescar el canvas
+        self.fig.tight_layout(pad=0)
+        self.canvas_horario.draw()
         # 1. Limpieza y configuración inicial
         self.ax.clear()
         self.ax.axis('off')
