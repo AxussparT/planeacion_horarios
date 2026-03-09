@@ -2,12 +2,12 @@ from src.conexion import get_conexion
 from tkinter import messagebox
 import mysql.connector
 
-def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
+def validar_y_registrar_materia(clave, nombre, horas_semana, semestre, tipo):
     """
     Función que maneja la lógica de validación, INSERT y UPDATE para materias.
-    Permite actualizar todos los campos (nombre, horas, semestre) basados en el ID.
+    Ahora incluye el campo 'tipo' (Normal, Tecnológica, Laboratorio).
     """
-    print(f"Iniciando registro/actualización para: {clave} - {nombre}...")
+    print(f"Iniciando registro/actualización para: {clave} - {nombre} (Tipo: {tipo})...")
     conexion = None 
     cursor = None
     transaccion_exitosa = False
@@ -16,13 +16,14 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
     clave = str(clave).strip()
     nombre = str(nombre).strip()
     horas_semana_str = str(horas_semana).strip()
+    tipo = str(tipo).strip() # Limpiamos el nuevo campo
     
     # Asigna el ID del semestre o None si el valor no es un dígito
     semestre_id = int(semestre) if str(semestre).strip().isdigit() else None
     
     # Validación simple de campos obligatorios
-    if not clave or not nombre:
-        messagebox.showerror("Error de Datos", "La clave y el nombre de la materia no pueden estar vacíos.")
+    if not clave or not nombre or not tipo:
+        messagebox.showerror("Error de Datos", "La clave, el nombre y el tipo de materia son obligatorios.")
         return False
 
     try:
@@ -42,28 +43,28 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
             # --- Materia YA existe: Preguntar para actualizar ---
             nombre_db = resultado[0]
             
-            # Si el nombre nuevo es distinto al de la BD, se lo notificamos al usuario
             mensaje_confirmacion = (
                 f"La materia con clave '{clave}' ya existe.\n\n"
                 f"Nombre actual: {nombre_db}\n"
                 f"Nombre nuevo: {nombre}\n\n"
-                f"¿Desea actualizar TODOS los datos de esta materia?"
+                f"¿Desea actualizar TODOS los datos (incluyendo el tipo: {tipo})?"
             )
             
             if messagebox.askyesno("Materia Existente", mensaje_confirmacion):
-                # ACTUALIZACIÓN: Ahora incluimos el nombre en el SET
+                # ACTUALIZACIÓN: Incluimos el campo 'tipo'
                 sql_update = """
                     UPDATE materias 
                     SET nombre = %s,
                         horas_semana = %s,
-                        semestre_id = %s
+                        semestre_id = %s,
+                        tipo = %s
                     WHERE materia_id = %s
                 """
                 # Los valores en el orden correcto para el SQL anterior
-                valores_update = (nombre, horas_semana_str, semestre_id, clave) 
+                valores_update = (nombre, horas_semana_str, semestre_id, tipo, clave) 
                 
                 cursor.execute(sql_update, valores_update)
-                messagebox.showinfo("Actualización Exitosa", f"Materia '{clave}' actualizada correctamente con el nombre: {nombre}")
+                messagebox.showinfo("Actualización Exitosa", f"Materia '{clave}' actualizada correctamente.")
                 transaccion_exitosa = True
                 return True
             else:
@@ -71,16 +72,16 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre):
                 return True
 
         else:
-            # --- Materia NO existe: Insertar nuevo registro ---
+            # --- Materia NO existe: Insertar nuevo registro con 'tipo' ---
             sql_insert = """
-                INSERT INTO materias (materia_id, nombre, horas_semana, semestre_id) 
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO materias (materia_id, nombre, horas_semana, semestre_id, tipo) 
+                VALUES (%s, %s, %s, %s, %s)
             """
-            valores_insert = (clave, nombre, horas_semana_str, semestre_id)
+            valores_insert = (clave, nombre, horas_semana_str, semestre_id, tipo)
             
             cursor.execute(sql_insert, valores_insert)
             
-            messagebox.showinfo("Éxito", f"Materia '{nombre}' guardada correctamente con clave {clave}.")
+            messagebox.showinfo("Éxito", f"Materia '{nombre}' guardada correctamente.")
             transaccion_exitosa = True
             return True
 

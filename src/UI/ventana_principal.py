@@ -103,6 +103,11 @@ class VentanaPrincipal:
         self.crear_label_entry("Nombre Materia", "entry_materia_nom")
         self.crear_label_entry("Horas Semana", "entry_materia_horas")
         self.crear_label_entry("Semestre", "entry_materia_semestre")
+        # Eliminamos la línea conflictiva y dejamos solo el label y el combobox
+        ttk.Label(self.frame_izquierdo_principal, text="Prioridad/Preferencia:", style='fondo.TLabel').pack()
+        self.combo_preferencia = ttk.Combobox(self.frame_izquierdo_principal, width=25, font=("Roboto", 12), state='readonly')
+        self.combo_preferencia['values'] = ("Normal", "Tecnológica", "Laboratorio")
+        self.combo_preferencia.pack(pady=5)
         # --- CONTENEDOR DE BOTONES Materias ---
         f_btns_materia = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
         f_btns_materia.pack(pady=20)
@@ -141,12 +146,33 @@ class VentanaPrincipal:
 
         # Tabla Materias
         self.sv_busqueda_mat = tk.StringVar(); self.sv_busqueda_mat.trace_add("write", lambda *a: self.filtrar_materias())
-        self.crear_seccion_tabla("Materias Registradas", "sv_busqueda_mat", "tabla_materias", ('Clave', 'Nombre', 'Hrs/Sem', 'Semestre'))
+        self.crear_seccion_tabla("Materias Registradas", "sv_busqueda_mat", "tabla_materias", ('Clave', 'Nombre', 'Hrs/Sem', 'Semestre','preferencia salon'))
+        self.tabla_materias.bind("<<TreeviewSelect>>", self.cargar_materia_seleccionada)
 
         # Tabla Salones
         self.crear_seccion_tabla("Salones Registrados", None, "tabla_salones", ('Aula', 'Capacidad', 'Tipo'))
 
     # --- MÉTODOS UI ---
+    def cargar_materia_seleccionada(self, event):
+        item = self.tabla_materias.focus()
+        if not item: 
+            return
+            
+        # Extraer valores de la fila
+        v = self.tabla_materias.item(item, "values")
+        
+        # Limpiar y rellenar los campos
+        self.limpiar_campos_materia()
+        
+        self.entry_materia_clave.insert(0, v[0])
+        self.entry_materia_nom.insert(0, v[1])
+        self.entry_materia_horas.insert(0, v[2])
+        self.entry_materia_semestre.insert(0, v[3])
+        
+        # Cargar el tipo en el Combobox
+        if len(v) > 4:
+            self.combo_preferencia.set(v[4])
+    
     def crear_label_entry(self, txt, attr):
         ttk.Label(self.frame_izquierdo_principal, text=txt, style='fondo.TLabel').pack()
         e = ttk.Entry(self.frame_izquierdo_principal, width=30, font=("Roboto", 12))
@@ -264,15 +290,16 @@ class VentanaPrincipal:
 
     # --- LÓGICA MATERIAS ---
     def evento_materias(self):
-        c, n, h, s = self.entry_materia_clave.get(), self.entry_materia_nom.get(), self.entry_materia_horas.get(), self.entry_materia_semestre.get()
-        if materia(c, n, h, s):
+        c, n, h, s, = self.entry_materia_clave.get(), self.entry_materia_nom.get(), self.entry_materia_horas.get(), self.entry_materia_semestre.get()
+        t=self.combo_preferencia.get()
+        if materia(c, n, h, s,t):
             self.mostrar_datos_materias()
             for e in [self.entry_materia_clave, self.entry_materia_nom, self.entry_materia_horas, self.entry_materia_semestre]: e.delete(0, tk.END)
 
     def mostrar_datos_materias(self):
         self.cache_materias.clear()
         conn = get_conexion(); cur = conn.cursor()
-        cur.execute("SELECT materia_id, nombre, horas_semana, semestre_id FROM materias")
+        cur.execute("SELECT materia_id, nombre, horas_semana, semestre_id,tipo FROM materias")
         self.cache_materias = cur.fetchall(); conn.close()
         self.refrescar_tabla_mat(self.cache_materias)
 
@@ -336,6 +363,7 @@ class VentanaPrincipal:
         self.entry_num_aula.delete(0, tk.END)
         self.entry_capacidad_aula.delete(0, tk.END)
         self.combo_tipo.set("")
+        
 
     def eliminar_materia(self):
         materia_id = self.entry_materia_clave.get().strip()
@@ -364,6 +392,7 @@ class VentanaPrincipal:
         self.entry_materia_nom.delete(0, tk.END)
         self.entry_materia_horas.delete(0, tk.END)
         self.entry_materia_semestre.delete(0, tk.END)
+        self.combo_preferencia.set("")
 
     def redimensionar_fondo(self, event):
         if event.widget is self.master:
