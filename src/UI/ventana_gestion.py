@@ -15,23 +15,22 @@ import src.clases.memoria_Horario_Grafico as mem_grafico
 
 class VentanaGestion:
     def __init__(self, master_window):
-        # 1. Configuración inicial de la ventana
         self.ventana = tk.Toplevel(master_window)
         self.ventana.title("Ventana de Gestión")
         self.ventana.state('zoomed')
         self.ventana.grab_set()
         self.ventana.transient(master_window)
 
-        # 2. Estilos
         estilo = ttk.Style()
         estilo.configure('blue.TFrame', background='#0A0F1E')
 
-        # 3. Inicialización de variables de datos
         self.profesores_map = {}
         self.materias_map = {}
         self.semestres_map = {}
         self.lista_maestra_semestres = []
         self.lista_maestra_materias = []
+        
+        self.asignacion_seleccionada_id = None
         
         self.grupos_por_semestre = {
             "1": ["S1A", "S1B", "S1C", "S1D", "S1E", "S1F"],
@@ -45,21 +44,16 @@ class VentanaGestion:
             "9": ["S9A", "S9B", "S9C"]
         }
 
-        # MANDATORIO: Llenar el tensor con datos reales antes de crear los widgets
         try:
             mem_grafico.inicializar_y_llenar_tensor("Salón")
         except Exception as e:
             print(f"Error al precargar el tensor: {e}")
 
-        # 4. Construcción de la Interfaz Gráfica
         self.construir_interfaz()
-
-        # 5. Carga de datos iniciales
         self.cargar_combos_bd()
         self.ventana.wait_window()
 
     def construir_interfaz(self):
-        # --- Fondo ---
         try:
             image = Image.open(r"assets/fondo.png")
             self.original_image = image
@@ -70,13 +64,11 @@ class VentanaGestion:
             print(f"Error al cargar fondo: {e}")
             self.ventana.config(bg="grey")
 
-        # --- Frame Principal ---
         self.frame_principal = ttk.Frame(self.ventana, style='blue.TFrame')
         self.frame_principal.place(relx=0.5, rely=0.5, anchor='center', width=1100, height=700)
 
         ttk.Button(self.frame_principal, text="Cerrar", command=self.ventana.destroy).pack(pady=2)
 
-        # --- Notebook (Pestañas) ---
         self.notebook = ttk.Notebook(self.frame_principal)
         self.notebook.pack(fill='both', expand='yes')
         
@@ -88,11 +80,9 @@ class VentanaGestion:
 
         self.Construccion_Ver_Horarios(self.pes1)
 
-        # --- Contenedor Superior (Gestión) ---
         frame_contenedor = ttk.Frame(self.pes0, style='blue.TFrame')
         frame_contenedor.pack(fill='x', pady=10)
 
-        # Lado Izquierdo (Periodo)
         self.frame_izq = ttk.Frame(frame_contenedor, style='blue.TFrame')
         self.frame_izq.pack(side='left', padx=10, anchor='n')
         
@@ -104,16 +94,23 @@ class VentanaGestion:
         self.combo_periodos.pack(pady=2, padx=10)
         self.combo_periodos.bind("<<ComboboxSelected>>", self.filtrar_materias_por_periodo)
 
-        # Lado Derecho (Título Vista Previa)
         self.frame_der = ttk.Frame(frame_contenedor, style='blue.TFrame')
-        self.frame_der.pack(side='left', padx=10, anchor='n')
+        self.frame_der.pack(side='left', padx=10, anchor='n', fill='both', expand=True)
         ttk.Label(self.frame_der, text="Vista Previa", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
 
-        # --- Contenedor Medio (Profesor y Materia) ---
+        # --- NUEVO: Filtro de Estado encima de la tabla ---
+        f_filtro_estado = ttk.Frame(self.frame_der, style='blue.TFrame')
+        f_filtro_estado.pack(fill='x', pady=2)
+        ttk.Label(f_filtro_estado, text="Filtrar por Estado:", background='#0A0F1E', foreground='white', font=("Roboto", 9)).pack(side='left', padx=5)
+        self.combo_estado_filtro = ttk.Combobox(f_filtro_estado, values=["Todos", "pendiente", "asignado"], state="readonly", width=15, font=("Roboto", 9))
+        self.combo_estado_filtro.set("Todos")
+        self.combo_estado_filtro.pack(side='left')
+        self.combo_estado_filtro.bind("<<ComboboxSelected>>", self.actualizar_vista_previa)
+        # --------------------------------------------------
+
         frame_contenedor2 = ttk.Frame(self.frame_izq, style='blue.TFrame')
         frame_contenedor2.pack(fill='x', pady=10)
 
-        # Profesor
         self.frame_izq_pf = ttk.Frame(frame_contenedor2, style='blue.TFrame')
         self.frame_izq_pf.pack(side='left', padx=10, anchor='n')
         ttk.Label(self.frame_izq_pf, text="Profesor", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
@@ -124,7 +121,6 @@ class VentanaGestion:
         
         ttk.Button(self.frame_izq_pf, text="Asignar Manualmente", command=self.asignar_profesor_materia).pack(pady=2)
 
-        # Materia
         self.frame_der_pf = ttk.Frame(frame_contenedor2, style='blue.TFrame')
         self.frame_der_pf.pack(side='left', padx=10, anchor='n')
         ttk.Label(self.frame_der_pf, text="Materia", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
@@ -133,11 +129,9 @@ class VentanaGestion:
         self.combo_materias.pack(pady=3)
         self.combo_materias.bind("<<ComboboxSelected>>", lambda e: (self.mostrar_semestre_de_materia(e), self.actualizar_vista_previa(e)))
 
-        # --- Contenedor Inferior (Grupo y Semestre) ---
         frame_contenedor3 = ttk.Frame(self.frame_izq, style='blue.TFrame')
         frame_contenedor3.pack(fill='x', pady=10)
 
-        # Grupo
         self.frame_izq_gp = ttk.Frame(frame_contenedor3, style='blue.TFrame')
         self.frame_izq_gp.pack(side='left', padx=10, anchor='n')
         ttk.Label(self.frame_izq_gp, text="Grupo", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
@@ -147,8 +141,13 @@ class VentanaGestion:
         
         boton_asignar = ttk.Button(self.frame_izq_gp, text="Empezar asignación automática", command=self.iniciar_asignacion_automatica) 
         boton_asignar.pack(pady=2)
+        
+        boton_formatear_asignaciones=ttk.Button(self.frame_izq_gp,text="Borrar asignaciones almacenadas", command=self.formatear_asignaciones)
+        boton_formatear_asignaciones.pack(pady=2)
+        
+        boton_borrar_asignacion=ttk.Button(self.frame_izq_gp,text="Borrar asignacion", command=self.borrar_asignacion_seleccionada)
+        boton_borrar_asignacion.pack(pady=2)
 
-        # Semestre
         self.frame_der_gp = ttk.Frame(frame_contenedor3, style='blue.TFrame')
         self.frame_der_gp.pack(side='left', padx=10, anchor='n')
         ttk.Label(self.frame_der_gp, text="Semestre", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
@@ -157,19 +156,22 @@ class VentanaGestion:
         self.combo_semestre.pack(pady=3)
         self.combo_semestre.bind("<<ComboboxSelected>>", self.filtrar_materias_semestre_seleccionado)
 
-        # --- Tabla Vista Previa ---
         self.frame_tablas = ttk.Frame(self.frame_der, style='blue.TFrame')
         self.frame_tablas.pack(padx=10, anchor='n', fill='both', expand=True)
 
-        columnas = ('Profesor', 'materia')
+        # --- NUEVO: Columna de Estado ---
+        columnas = ('Profesor', 'materia', 'Estado')
         self.tabla_profesores = ttk.Treeview(self.frame_tablas, columns=columnas, show='headings', height=20)
-        self.tabla_profesores.column('Profesor', anchor='w', width=200)
-        self.tabla_profesores.column('materia', anchor='w', width=250)
+        self.tabla_profesores.column('Profesor', anchor='w', width=180)
+        self.tabla_profesores.column('materia', anchor='w', width=200)
+        self.tabla_profesores.column('Estado', anchor='center', width=80)
         
         self.tabla_profesores.heading('Profesor', text='Profesor')
         self.tabla_profesores.heading('materia', text='Materia (Grupo)')
+        self.tabla_profesores.heading('Estado', text='Estado')
 
-        # Scrollbars
+        self.tabla_profesores.bind("<<TreeviewSelect>>", self.cargar_asignacion_seleccionada)
+
         sb_v = ttk.Scrollbar(self.frame_tablas, orient='vertical', command=self.tabla_profesores.yview)
         self.tabla_profesores.configure(yscroll=sb_v.set)
         sb_v.pack(side='right', fill='y')
@@ -179,21 +181,17 @@ class VentanaGestion:
         sb_h.pack(side='bottom', fill='x')
 
         self.tabla_profesores.pack(fill='both', expand=True)
-
-        boton_limpiar = ttk.Button(self.frame_der, text="Ver Todas las Asignaciones", command=self.limpiar_filtros)
+        
+        boton_limpiar = ttk.Button(self.frame_der, text="Ver Todas las Asignaciones / Limpiar Selección", command=self.limpiar_filtros)
         boton_limpiar.pack(pady=10, side='bottom', fill='x', padx=20)
 
     # --- UTILIDADES ---
     def _obtener_id_valido(self, texto_combo, es_grupo=False):
-        if not texto_combo:
-            return None
+        if not texto_combo: return None
         textos_invalidos = ["sin grupos", "cargando", "seleccione", "sin materias", "no asignado", "grupos llenos"]
-        if any(txt in texto_combo.lower() for txt in textos_invalidos):
-            return None
-        if ' - ' in texto_combo:
-            return texto_combo.split(' - ')[0]
-        if es_grupo:
-            return texto_combo.upper()
+        if any(txt in texto_combo.lower() for txt in textos_invalidos): return None
+        if ' - ' in texto_combo: return texto_combo.split(' - ')[0]
+        if es_grupo: return texto_combo.upper()
         return None
 
     def redimensionar_fondo(self, event):
@@ -202,10 +200,87 @@ class VentanaGestion:
                 resized = self.original_image.resize((event.width, event.height), Image.LANCZOS)
                 self.background_image = ImageTk.PhotoImage(resized)
                 self.background_label.config(image=self.background_image)
-        except Exception as e:
-            print(f"Error resize: {e}")
+        except Exception as e: print(f"Error resize: {e}")
 
     # --- LÓGICA DE NEGOCIO ---
+    
+    def borrar_asignacion_seleccionada(self):
+        if not self.asignacion_seleccionada_id:
+            messagebox.showwarning("Aviso", "Primero selecciona una asignación de la tabla de la derecha.")
+            return
+
+        if messagebox.askyesno("Confirmar", "¿Estás seguro de eliminar esta asignación?"):
+            conn = get_conexion()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
+                cur.execute("DELETE FROM asignaciones WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
+                conn.commit()
+                
+                messagebox.showinfo("Éxito", "Asignación eliminada correctamente.")
+                self.asignacion_seleccionada_id = None 
+                self.actualizar_vista_previa()
+            except Exception as e:
+                conn.rollback()
+                messagebox.showerror("Error", f"No se pudo borrar: {e}")
+            finally:
+                cur.close()
+                conn.close()
+
+    def formatear_asignaciones(self):
+        if messagebox.askyesno("¡ADVERTENCIA CRÍTICA!", "¿Estás ABSOLUTAMENTE SEGURO de querer borrar TODAS las asignaciones guardadas?\n\nEsto vaciará por completo la base de datos de horarios. No se puede deshacer."):
+            conn = get_conexion()
+            cur = conn.cursor()
+            try:
+                cur.execute("DELETE FROM horarios")
+                cur.execute("DELETE FROM asignaciones")
+                try: cur.execute("ALTER TABLE horarios AUTO_INCREMENT = 1")
+                except: pass
+                try: cur.execute("ALTER TABLE asignaciones AUTO_INCREMENT = 1")
+                except: pass
+                
+                conn.commit()
+                messagebox.showinfo("Éxito", "La base de datos de asignaciones ha sido limpiada.")
+                self.asignacion_seleccionada_id = None
+                self.actualizar_vista_previa()
+            except Exception as e:
+                conn.rollback()
+                messagebox.showerror("Error", f"Ocurrió un error al formatear: {e}")
+            finally:
+                cur.close()
+                conn.close()
+
+    def cargar_asignacion_seleccionada(self, event):
+        item = self.tabla_profesores.focus()
+        if not item: return
+        
+        v = self.tabla_profesores.item(item, "values")
+        if len(v) < 4: return # Ahora verificamos que traiga los 4 elementos (ID en pos 3)
+        
+        self.asignacion_seleccionada_id = v[3] 
+        
+        p_str = v[0] 
+        m_g_str = v[1] 
+        
+        g_str = ""
+        m_str = m_g_str
+        if "(" in m_g_str and m_g_str.endswith(")"):
+            m_str = m_g_str[:m_g_str.rfind("(")].strip()
+            g_str = m_g_str[m_g_str.rfind("(")+1:-1].strip()
+
+        for val in self.combo_profesores['values']:
+            if val.startswith(p_str.split(" - ")[0]):
+                self.combo_profesores.set(val)
+                break
+                
+        for val in self.combo_materias['values']:
+            if val.startswith(m_str.split(" - ")[0]):
+                self.combo_materias.set(val)
+                break
+        
+        self.mostrar_semestre_de_materia()
+        self.combo_grupos.set(g_str)
+
     def iniciar_asignacion_automatica(self):
         respuesta = messagebox.askyesnocancel(
             "Tipo de Asignación", 
@@ -214,9 +289,7 @@ class VentanaGestion:
             "• NO: Mantiene los horarios actuales y SOLO asigna los pendientes.\n"
             "• CANCELAR: Abortar operación."
         )
-        
         if respuesta is None: return
-            
         modo_seleccionado = "completo" if respuesta else "parcial"
         
         conexion = get_conexion()
@@ -252,7 +325,11 @@ class VentanaGestion:
             if conexion:
                 try:
                     cursor = conexion.cursor()
-                    cursor.execute("SELECT grupo_id FROM asignaciones WHERE materia_id = %s", (materia_id,))
+                    if self.asignacion_seleccionada_id:
+                        cursor.execute("SELECT grupo_id FROM asignaciones WHERE materia_id = %s AND asignacion_id != %s", (materia_id, self.asignacion_seleccionada_id))
+                    else:
+                        cursor.execute("SELECT grupo_id FROM asignaciones WHERE materia_id = %s", (materia_id,))
+                    
                     grupos_ocupados = [row[0] for row in cursor.fetchall()]
                     grupos_filtrados = [g for g in grupos_base if g not in grupos_ocupados]
                 except mysql.connector.Error as err:
@@ -262,14 +339,8 @@ class VentanaGestion:
                     conexion.close()
 
         self.combo_grupos['values'] = grupos_filtrados
-        if grupos_filtrados:
+        if grupos_filtrados and not self.combo_grupos.get():
             self.combo_grupos.set(grupos_filtrados[0])
-        else:
-            self.combo_grupos.set("")
-            if grupos_base:
-                self.combo_grupos.set("Grupos llenos para esta materia")
-            else:
-                self.combo_grupos.set("sin grupos cargados")
 
     def cargar_combos_bd(self):
         conexion = get_conexion()
@@ -318,11 +389,13 @@ class VentanaGestion:
             conexion.close()
 
     def limpiar_filtros(self):
+        self.asignacion_seleccionada_id = None 
         self.combo_profesores.set('')
         self.combo_materias.set('')
         self.combo_grupos.set('')
         self.combo_periodos.set('')
         self.combo_semestre.set('')
+        self.combo_estado_filtro.set('Todos')
         self.actualizar_vista_previa()
 
     def filtrar_materias_por_periodo(self, event=None):
@@ -398,25 +471,45 @@ class VentanaGestion:
         if not prof_id or not mat_id:
             messagebox.showerror("Error", "Seleccione Profesor y Materia válidos")
             return
+            
         grupo_id = self.obtener_o_crear_grupo(self.combo_grupos.get())
         if not grupo_id: return
+        
         conexion = get_conexion()
         if not conexion: return
         cursor = conexion.cursor()
+        
         try:
-            sql_check = "SELECT COUNT(*) FROM asignaciones WHERE profesor_id=%s AND materia_id=%s AND grupo_id=%s"
-            cursor.execute(sql_check, (prof_id, mat_id, grupo_id))
-            if cursor.fetchone()[0] > 0:
-                messagebox.showwarning("Aviso", "Esta asignación ya existe")
-                return
-            sql_ins = "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado) VALUES (%s, %s, %s, 'pendiente')"
-            cursor.execute(sql_ins, (prof_id, mat_id, grupo_id))
-            conexion.commit()
-            messagebox.showinfo("Éxito", "Asignación guardada correctamente")
+            if self.asignacion_seleccionada_id:
+                sql_check = "SELECT COUNT(*) FROM asignaciones WHERE profesor_id=%s AND materia_id=%s AND grupo_id=%s AND asignacion_id != %s"
+                cursor.execute(sql_check, (prof_id, mat_id, grupo_id, self.asignacion_seleccionada_id))
+                if cursor.fetchone()[0] > 0:
+                    messagebox.showwarning("Aviso", "Otra asignación ya utiliza estos mismos datos.")
+                    return
+                
+                sql_upd = "UPDATE asignaciones SET profesor_id=%s, materia_id=%s, grupo_id=%s, estado='pendiente' WHERE asignacion_id=%s"
+                cursor.execute(sql_upd, (prof_id, mat_id, grupo_id, self.asignacion_seleccionada_id))
+                cursor.execute("DELETE FROM horarios WHERE asignacion_id=%s", (self.asignacion_seleccionada_id,))
+                
+                conexion.commit()
+                messagebox.showinfo("Éxito", "Asignación modificada correctamente. Su horario anterior fue borrado para ser reasignado.")
+                self.asignacion_seleccionada_id = None 
+            else:
+                sql_check = "SELECT COUNT(*) FROM asignaciones WHERE profesor_id=%s AND materia_id=%s AND grupo_id=%s"
+                cursor.execute(sql_check, (prof_id, mat_id, grupo_id))
+                if cursor.fetchone()[0] > 0:
+                    messagebox.showwarning("Aviso", "Esta asignación ya existe")
+                    return
+                    
+                sql_ins = "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado) VALUES (%s, %s, %s, 'pendiente')"
+                cursor.execute(sql_ins, (prof_id, mat_id, grupo_id))
+                conexion.commit()
+                messagebox.showinfo("Éxito", "Asignación nueva guardada correctamente")
+                
             self.actualizar_vista_previa()
         except mysql.connector.Error as err:
             conexion.rollback()
-            messagebox.showerror("Error BD", f"Error al asignar: {err}")
+            messagebox.showerror("Error BD", f"Error al guardar asignación: {err}")
         finally:
             cursor.close()
             conexion.close()
@@ -425,6 +518,7 @@ class VentanaGestion:
         prof_id = self._obtener_id_valido(self.combo_profesores.get()) if hasattr(self, 'combo_profesores') else None
         mat_id = self._obtener_id_valido(self.combo_materias.get()) if hasattr(self, 'combo_materias') else None
         grup_id = self._obtener_id_valido(self.combo_grupos.get(), es_grupo=True) if hasattr(self, 'combo_grupos') else None
+        estado_filtro = self.combo_estado_filtro.get() if hasattr(self, 'combo_estado_filtro') else "Todos"
 
         if hasattr(self, 'tabla_profesores'):
             for item in self.tabla_profesores.get_children():
@@ -435,11 +529,14 @@ class VentanaGestion:
         cursor = conexion.cursor()
 
         try:
+            # --- NUEVO: Traemos el campo estado para mostrarlo y filtrarlo ---
             sql = """
                 SELECT 
+                    a.asignacion_id,
                     a.profesor_id, IFNULL(p.nombre, 'Sin Profesor'), 
                     a.materia_id, IFNULL(m.nombre, 'Materia Desconocida'),
-                    a.grupo_id, IFNULL(g.nombre, 'Sin Grupo')
+                    a.grupo_id, IFNULL(g.nombre, 'Sin Grupo'),
+                    IFNULL(a.estado, 'pendiente') AS estado
                 FROM asignaciones a
                 LEFT JOIN profesores p ON a.profesor_id = p.profesor_id
                 LEFT JOIN materias m ON a.materia_id = m.materia_id
@@ -447,15 +544,19 @@ class VentanaGestion:
                 WHERE 1=1 
             """
             params = []
-            if prof_id:
+            if prof_id and not self.asignacion_seleccionada_id:
                 sql += " AND a.profesor_id = %s"
                 params.append(prof_id)
-            if mat_id:
+            if mat_id and not self.asignacion_seleccionada_id:
                 sql += " AND a.materia_id = %s"
                 params.append(mat_id)
-            if grup_id:
+            if grup_id and not self.asignacion_seleccionada_id:
                 sql += " AND a.grupo_id = %s"
                 params.append(grup_id)
+                
+            if estado_filtro != "Todos":
+                sql += " AND a.estado = %s"
+                params.append(estado_filtro)
 
             sql += " LIMIT 50"
             cursor.execute(sql, params)
@@ -463,15 +564,18 @@ class VentanaGestion:
 
             if resultados and hasattr(self, 'tabla_profesores'):
                 for row in resultados:
-                    p_str = f"{row[0]} - {row[1]}"
-                    m_str = f"{row[2]} - {row[3]} ({row[4]})"
-                    self.tabla_profesores.insert('', 'end', values=(p_str, m_str))
+                    asig_id = row[0]
+                    p_str = f"{row[1]} - {row[2]}"
+                    m_str = f"{row[3]} - {row[4]} ({row[5]})"
+                    estado_str = str(row[6]).upper()
+                    
+                    self.tabla_profesores.insert('', 'end', values=(p_str, m_str, estado_str, asig_id))
             elif hasattr(self, 'tabla_profesores'):
-                self.tabla_profesores.insert('', 'end', values=("(No hay resultados)", ""))
+                self.tabla_profesores.insert('', 'end', values=("(No hay resultados)", "", "", ""))
 
         except mysql.connector.Error as err:
             if hasattr(self, 'tabla_profesores'):
-                self.tabla_profesores.insert('', 'end', values=(f"Error BD: {err}", ""))
+                self.tabla_profesores.insert('', 'end', values=(f"Error BD: {err}", "", "", ""))
         finally:
             cursor.close()
             conexion.close()

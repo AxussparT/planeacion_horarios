@@ -150,7 +150,9 @@ class VentanaPrincipal:
         self.tabla_materias.bind("<<TreeviewSelect>>", self.cargar_materia_seleccionada)
 
         # Tabla Salones
+# Tabla Salones
         self.crear_seccion_tabla("Salones Registrados", None, "tabla_salones", ('Aula', 'Capacidad', 'Tipo'))
+        self.tabla_salones.bind("<<TreeviewSelect>>", self.cargar_salon_seleccionado) # <--- LÍNEA NUEVA
 
     # --- MÉTODOS UI ---
     def cargar_materia_seleccionada(self, event):
@@ -213,16 +215,27 @@ class VentanaPrincipal:
         if not item: return
         v = self.tabla_profesores.item(item, "values")
         self.limpiar_campos_profesor()
+        
         self.entry_no_cuenta.insert(0, v[0])
         self.entry_no_cuenta.config(state='readonly') 
         nombres = v[1].split(" ", 1)
         self.entry_nombre.insert(0, nombres[0])
         if len(nombres) > 1: self.entry_apellido.insert(0, nombres[1])
-        self.combo_linea.set(v[4])
+        
+        # --- CORRECCIÓN: Arreglar el texto del Combobox para evitar errores de acento ---
+        valor_bd_linea = str(v[4]).strip().upper()
+        if valor_bd_linea == "SI" or valor_bd_linea == "SÍ":
+            self.combo_linea.set("Sí")
+        elif valor_bd_linea == "NO":
+            self.combo_linea.set("No")
+        else:
+            self.combo_linea.set(v[4])
+            
         if "-" in v[3]:
             horas = v[3].split("-")
             self.entry_horario_i.insert(0, horas[0].strip())
             if len(horas) > 1: self.entry_horario_f.insert(0, horas[1].strip())
+            
         dias_db = v[2].split(", ")
         for dia in dias_db:
             if dia.strip() in self.vars_dias: self.vars_dias[dia.strip()].set(1)
@@ -232,45 +245,139 @@ class VentanaPrincipal:
         self.entry_no_cuenta.config(state='normal')
         cuenta_base = self.entry_no_cuenta.get().strip()
         full_n = f"{self.entry_nombre.get()} {self.entry_apellido.get()}".strip()
-        opcion_linea = self.combo_linea.get()
+        
+        # --- CORRECCIÓN: Normalizamos la opción (mayúsculas, sin espacios) ---
+        opcion_linea = self.combo_linea.get().strip().upper()
+        
+        hora_i = self.entry_horario_i.get()
+        hora_f = self.entry_horario_f.get()
 
         if not cuenta_base:
             messagebox.showwarning("Aviso", "El número de cuenta es obligatorio.")
             return
 
         exito = False
+        conn = get_conexion()
+        cur = conn.cursor()
 
-        # 1. Registro Presencial (Si elige 'No' o 'Ambos')
-        if opcion_linea in ["No", "Ambos"]:
-            if validar_y_registrar_profesor(cuenta_base, full_n, self.dias_seleccionados, self.entry_horario_i.get(), self.entry_horario_f.get(), "No"):
-                exito = True
+        try:
+            # 1. Registro o Actualización Presencial
+            # Buscamos "NO" o "AMBOS"
+            if opcion_linea in ["NO", "AMBOS"]:
+                # Le quitamos el "-L" por si el usuario cargó la cuenta en línea por error
+                cuenta_presencial = cuenta_base.replace("-L", "") 
+                existe_presencial = any(p[0] == cuenta_presencial for p in self.cache_profesores)
+                
+                if existe_presencial:
+                    cur.execute("""
+                        UPDATE profesores 
+                        SET nombre=%s, dias_disponibles=%s, disponible_inicio=%s, disponible_fin=%s, en_linea='NO' 
+                        WHERE profesor_id=%s
+                    """, (full_n, self.dias_seleccionados, hora_i, hora_f, cuenta_presencial))
+                    exito = True
+                else:
+                    if validar_y_registrar_profesor(cuenta_presencial, full_n, self.dias_seleccionados, hora_i, hora_f, "No"):
+                        exito = True
 
-        # 2. Registro En Línea (Si elige 'Sí' o 'Ambos')
-        if opcion_linea in ["Sí", "Ambos"]:
-            # Agregamos el sufijo '-L' para la BD (ej. P015 se vuelve P015-L)
-            # Evitamos duplicar el sufijo si el usuario ya está editando un perfil con "-L"
-            cuenta_linea = cuenta_base if cuenta_base.endswith("-L") else f"{cuenta_base}-L"
-            
-            if validar_y_registrar_profesor(cuenta_linea, full_n, self.dias_seleccionados, self.entry_horario_i.get(), self.entry_horario_f.get(), "Sí"):
-                exito = True
+            # 2. Registro o Actualización En Línea 
+            # Aceptamos "SÍ", "SI" y "AMBOS"
+            if opcion_linea in ["SÍ", "SI", "AMBOS"]:
+                cuenta_linea = cuenta_base if cuenta_base.endswith("-L") else f"{cuenta_base}-L"
+                existe_linea = any(p[0] == cuenta_linea for p in self.cache_profesores)
+                
+                if existe_linea:
+                    cur.execute("""
+                        UPDATE profesores 
+                        SET nombre=%s, dias_disponibles=%s, disponible_inicio=%s, disponible_fin=%s, en_linea='SI' 
+                        WHERE profesor_id=%s
+                    """, (full_n, self.dias_seleccionados, hora_i, hora_f, cuenta_linea))
+                    exito = True
+                else:
+                    if validar_y_registrar_profesor(cuenta_linea, full_n, self.dias_seleccionados, hora_i, hora_f, "Sí"):
+                        exito = True
 
-        # Actualizar tabla y limpiar si al menos un registro fue exitoso
-        if exito:
-            self.mostrar_datos_profesor()
-            self.limpiar_campos_profesor()
+            if exito:
+                conn.commit()
+                self.mostrar_datos_profesor()
+                self.limpiar_campos_profesor()
+                messagebox.showinfo("Éxito", "Datos del profesor guardados/actualizados correctamente.")
+            else:
+                messagebox.showwarning("Atención", "No se realizó ningún cambio. Verifique la opción de modalidad seleccionada.")
+                
+        except Exception as e:
+            conn.rollback()
+            messagebox.showerror("Error", f"Fallo al guardar: {e}")
+        finally:
+            cur.close()
+            conn.close()
 
     def eliminar_profesor(self):
         self.entry_no_cuenta.config(state='normal')
         pid = self.entry_no_cuenta.get().strip()
-        if not pid: return
-        if messagebox.askyesno("Confirmar", f"¿Eliminar al profesor {pid}?"):
-            conn = get_conexion(); cur = conn.cursor()
+        
+        if not pid: 
+            return
+            
+        if messagebox.askyesno("Confirmar Eliminación", f"¿Estás seguro de eliminar al profesor {pid}? Esto borrará también sus asignaciones y horarios."):
+            conn = get_conexion()
+            cur = conn.cursor()
             try:
+                # 1. Borramos sus horarios primero
+                cur.execute("DELETE FROM horarios WHERE asignacion_id IN (SELECT asignacion_id FROM asignaciones WHERE profesor_id = %s)", (pid,))
+                # 2. Borramos sus materias asignadas
                 cur.execute("DELETE FROM asignaciones WHERE profesor_id = %s", (pid,))
+                # 3. Borramos al profesor
                 cur.execute("DELETE FROM profesores WHERE profesor_id = %s", (pid,))
-                conn.commit(); self.mostrar_datos_profesor(); self.limpiar_campos_profesor()
-            except Exception as e: messagebox.showerror("Error", str(e))
-            finally: conn.close()
+                
+                conn.commit()
+                messagebox.showinfo("Éxito", "Profesor eliminado correctamente.")
+                self.mostrar_datos_profesor()
+                self.limpiar_campos_profesor()
+                
+            except Exception as e: 
+                conn.rollback()
+                messagebox.showerror("Error de Base de Datos", str(e))
+            finally: 
+                cur.close()
+                conn.close()
+    
+    def cargar_salon_seleccionado(self, event):
+        item = self.tabla_salones.focus()
+        if not item: 
+            return
+            
+        v = self.tabla_salones.item(item, "values")
+        self.limpiar_campos_salon()
+        
+        self.entry_num_aula.insert(0, v[0])
+        self.entry_capacidad_aula.insert(0, v[1])
+        if len(v) > 2:
+            self.combo_tipo.set(v[2])
+    def eliminar_salon(self):
+        aula_id = self.entry_num_aula.get().strip()
+
+        if not aula_id:
+            return
+        
+        if messagebox.askyesno("Confirmar Eliminación", f"¿Estás seguro de eliminar el aula {aula_id}?"):
+            conn = get_conexion()
+            cur = conn.cursor()
+            try:
+                # Borramos primero sus dependencias en horarios para evitar errores
+                cur.execute("DELETE FROM horarios WHERE salon_id = %s", (aula_id,))
+                cur.execute("DELETE FROM salones WHERE salon_id = %s", (aula_id,))
+                conn.commit()
+                
+                messagebox.showinfo("Éxito", "Salón eliminado correctamente.")
+                self.mostrar_datos_salones()
+                self.limpiar_campos_salon()
+
+            except Exception as e:
+                conn.rollback()
+                messagebox.showerror("Error de Base de Datos", str(e))
+            finally:
+                cur.close()
+                conn.close()
 
     def mostrar_datos_profesor(self):
         self.cache_profesores.clear()
