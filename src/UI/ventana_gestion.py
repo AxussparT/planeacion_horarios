@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import mysql.connector
 import datetime
 import textwrap
+import os 
 
 from src.conexion import get_conexion
 from src.motor_horarios import GeneradorHorarios
@@ -631,18 +632,22 @@ class VentanaGestion:
 
     def exportar_pdf_completo(self):
         modo = self.combo_vista_horarios.get()
+        
+        # --- NUEVO: Detectar ruta de Descargas dinámicamente ---
+        ruta_descargas = os.path.join(os.path.expanduser('~'), 'Downloads')
         nombre_archivo = f"Horarios_Plasem_{modo}_{datetime.datetime.now().strftime('%H%M%S')}.pdf"
+        ruta_completa = os.path.join(ruta_descargas, nombre_archivo)
         
         if not mem_grafico.entidades_actuales:
             messagebox.showwarning("Aviso", "No hay datos para exportar.")
             return
 
-        respuesta = messagebox.askyesno("Confirmar", f"¿Deseas generar un PDF de múltiples páginas con todos los horarios por {modo}?\nEsto tardará unos segundos.")
+        respuesta = messagebox.askyesno("Confirmar", f"¿Deseas generar un PDF de múltiples páginas con todos los horarios por {modo}?\nSe guardará en tu carpeta de Descargas.")
         if not respuesta: return
 
         try:
             indice_respaldo = self.s_idx
-            with PdfPages(nombre_archivo) as pdf:
+            with PdfPages(ruta_completa) as pdf: # Guardamos en la nueva ruta
                 for s in mem_grafico.entidades_actuales:
                     self.s_idx = s[1]
                     self.actualizar_tabla_grafica() 
@@ -650,7 +655,7 @@ class VentanaGestion:
                     
             self.s_idx = indice_respaldo
             self.actualizar_tabla_grafica()
-            messagebox.showinfo("Éxito", f"Reporte PDF guardado exitosamente:\n{nombre_archivo}")
+            messagebox.showinfo("Éxito", f"Reporte PDF guardado exitosamente en:\n{ruta_completa}")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el PDF:\n{e}")
 
@@ -658,6 +663,21 @@ class VentanaGestion:
         if not hasattr(mem_grafico, 'entidades_actuales') or not mem_grafico.entidades_actuales:
             messagebox.showwarning("Aviso", "No hay un horario generado para capturar.")
             return
+
+        try:
+            nombre_real = next(e[0] for e in mem_grafico.entidades_actuales if e[1] == self.s_idx)
+            modo = mem_grafico.modo_actual
+            nombre_seguro = "".join([c if c.isalnum() else "_" for c in nombre_real])
+            
+            # --- NUEVO: Detectar ruta de Descargas dinámicamente ---
+            ruta_descargas = os.path.join(os.path.expanduser('~'), 'Downloads')
+            nombre_archivo = f"Horario_{modo}_{nombre_seguro}_{datetime.datetime.now().strftime('%H%M%S')}.png"
+            ruta_completa = os.path.join(ruta_descargas, nombre_archivo)
+            
+            self.fig.savefig(ruta_completa, bbox_inches='tight', dpi=200) # Guardamos en la nueva ruta
+            messagebox.showinfo("Captura Guardada", f"Se ha guardado la imagen exitosamente en:\n{ruta_completa}")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo guardar la captura:\n{e}")
 
         try:
             nombre_real = next(e[0] for e in mem_grafico.entidades_actuales if e[1] == self.s_idx)
