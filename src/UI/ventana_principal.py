@@ -9,6 +9,16 @@ from src.clases.validacion_bd import validar_y_registrar_profesor
 from src.clases.profesor import profesor 
 from src.clases.materia import materia
 from src.clases.salon import salon 
+import os
+import sys
+
+def ruta_recurso(relative_path):
+    """obtiene la ruta absoluta del recurso, funciona para el modo de desarrollo y .exe"""
+    try:
+        base_path=sys._MEIPASS
+    except Exception:
+        base_path=os.path.abspath(".")
+    return os.path.join(base_path,relative_path)
 
 #python -m src.UI.ventana_principal
 
@@ -37,7 +47,7 @@ class VentanaPrincipal:
         
         # --- CARGA DE FONDO ---
         try:
-            image = Image.open(r"assets/fondo.png")
+            image = Image.open(ruta_recurso("assets/fondo.png"))
             self.original_image = image
             self.background_label = tk.Label(self.master)
             self.background_label.place(x=0, y=0, relwidth=1, relheight=1)
@@ -511,8 +521,8 @@ class VentanaPrincipal:
 
     
 
-if __name__ == "__main__":
+"""if __name__ == "__main__":
     root = tk.Tk()
     app = VentanaPrincipal(root)
     app.mostrar_datos_profesor(); app.mostrar_datos_materias(); app.mostrar_datos_salones()
-    root.mainloop()
+    root.mainloop()"""

@@ -14,6 +14,17 @@ from matplotlib.patches import Rectangle
 from matplotlib.backends.backend_pdf import PdfPages
 import src.clases.memoria_Horario_Grafico as mem_grafico
 
+import os
+import sys
+
+def ruta_recurso(relative_path):
+    """obtiene la ruta absoluta del recurso, funciona para el modo de desarrollo y .exe"""
+    try:
+        base_path=sys._MEIPASS
+    except Exception:
+        base_path=os.path.abspath(".")
+    return os.path.join(base_path,relative_path)
+
 class VentanaGestion:
     def __init__(self, master_window):
         self.ventana = tk.Toplevel(master_window)
@@ -56,7 +67,7 @@ class VentanaGestion:
 
     def construir_interfaz(self):
         try:
-            image = Image.open(r"assets/fondo.png")
+            image = Image.open(ruta_recurso("assets/fondo.png"))
             self.original_image = image
             self.background_label = tk.Label(self.ventana)
             self.background_label.place(x=0, y=0, relwidth=1, relheight=1)
@@ -116,19 +127,26 @@ class VentanaGestion:
         self.frame_izq_pf.pack(side='left', padx=10, anchor='n')
         ttk.Label(self.frame_izq_pf, text="Profesor", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
         
-        self.combo_profesores = ttk.Combobox(self.frame_izq_pf, width=30, font=("Roboto", 9), state='readonly')
+        self.combo_profesores = ttk.Combobox(self.frame_izq_pf, width=40, font=("Roboto", 9), state='readonly')
         self.combo_profesores.pack(pady=3)
         self.combo_profesores.bind("<<ComboboxSelected>>", self.actualizar_vista_previa)
         
-        ttk.Button(self.frame_izq_pf, text="Asignar Manualmente", command=self.asignar_profesor_materia).pack(pady=2)
+  
 
-        self.frame_der_pf = ttk.Frame(frame_contenedor2, style='blue.TFrame')
-        self.frame_der_pf.pack(side='left', padx=10, anchor='n')
-        ttk.Label(self.frame_der_pf, text="Materia", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
+#correccion de elementos a filas
+        frame_contenedor_mt = ttk.Frame(self.frame_izq, style='blue.TFrame')
+        frame_contenedor_mt.pack(fill='x', pady=5)
         
-        self.combo_materias = ttk.Combobox(self.frame_der_pf, width=30, font=("Roboto", 9), state='readonly')
+        self.frame_izq_mt = ttk.Frame(frame_contenedor_mt, style='blue.TFrame')
+        self.frame_izq_mt.pack(side='left', pady=10, anchor='n')
+        #self.frame_izq_mt.pack(fill='x', pady=10)
+        ttk.Label(self.frame_izq_mt, text="Materia", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
+        
+        self.combo_materias = ttk.Combobox(self.frame_izq_mt, width=40, font=("Roboto", 9), state='readonly')
         self.combo_materias.pack(pady=3)
         self.combo_materias.bind("<<ComboboxSelected>>", lambda e: (self.mostrar_semestre_de_materia(e), self.actualizar_vista_previa(e)))
+        
+        ttk.Button(self.frame_izq_mt, text="Asignar Manualmente", command=self.asignar_profesor_materia).pack(pady=2)
 
         frame_contenedor3 = ttk.Frame(self.frame_izq, style='blue.TFrame')
         frame_contenedor3.pack(fill='x', pady=10)
@@ -394,8 +412,8 @@ class VentanaGestion:
         self.combo_profesores.set('')
         self.combo_materias.set('')
         self.combo_grupos.set('')
-        self.combo_periodos.set('')
-        self.combo_semestre.set('')
+        #self.combo_periodos.set('')
+        #self.combo_semestre.set('')
         self.combo_estado_filtro.set('Todos')
         self.actualizar_vista_previa()
 
