@@ -4,7 +4,8 @@ from PIL import Image, ImageTk
 import mysql.connector
 import datetime
 import textwrap
-import os 
+import os
+import sys
 
 from src.conexion import get_conexion
 from src.motor_horarios import GeneradorHorarios
@@ -14,16 +15,12 @@ from matplotlib.patches import Rectangle
 from matplotlib.backends.backend_pdf import PdfPages
 import src.clases.memoria_Horario_Grafico as mem_grafico
 
-import os
-import sys
-
 def ruta_recurso(relative_path):
-    """obtiene la ruta absoluta del recurso, funciona para el modo de desarrollo y .exe"""
     try:
-        base_path=sys._MEIPASS
+        base_path = sys._MEIPASS
     except Exception:
-        base_path=os.path.abspath(".")
-    return os.path.join(base_path,relative_path)
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 class VentanaGestion:
     def __init__(self, master_window):
@@ -43,6 +40,7 @@ class VentanaGestion:
         self.lista_maestra_materias = []
         
         self.asignacion_seleccionada_id = None
+        self.entidades_filtradas = []
         
         self.grupos_por_semestre = {
             "1": ["S1A", "S1B", "S1C", "S1D", "S1E", "S1F"],
@@ -67,7 +65,7 @@ class VentanaGestion:
 
     def construir_interfaz(self):
         try:
-            image = Image.open(ruta_recurso("assets/fondo.png"))
+            image = Image.open(ruta_recurso(r"assets/fondo.png"))
             self.original_image = image
             self.background_label = tk.Label(self.ventana)
             self.background_label.place(x=0, y=0, relwidth=1, relheight=1)
@@ -110,15 +108,13 @@ class VentanaGestion:
         self.frame_der.pack(side='left', padx=10, anchor='n', fill='both', expand=True)
         ttk.Label(self.frame_der, text="Vista Previa", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
 
-        # --- NUEVO: Filtro de Estado encima de la tabla ---
         f_filtro_estado = ttk.Frame(self.frame_der, style='blue.TFrame')
         f_filtro_estado.pack(fill='x', pady=2)
         ttk.Label(f_filtro_estado, text="Filtrar por Estado:", background='#0A0F1E', foreground='white', font=("Roboto", 9)).pack(side='left', padx=5)
         self.combo_estado_filtro = ttk.Combobox(f_filtro_estado, values=["Todos", "pendiente", "asignado"], state="readonly", width=15, font=("Roboto", 9))
         self.combo_estado_filtro.set("Todos")
         self.combo_estado_filtro.pack(side='left')
-        self.combo_estado_filtro.bind("<<ComboboxSelected>>", self.actualizar_vista_previa)
-        # --------------------------------------------------
+        self.combo_estado_filtro.bind("<<ComboboxSelected>>", lambda e: self.actualizar_vista_previa())
 
         frame_contenedor2 = ttk.Frame(self.frame_izq, style='blue.TFrame')
         frame_contenedor2.pack(fill='x', pady=10)
@@ -127,26 +123,19 @@ class VentanaGestion:
         self.frame_izq_pf.pack(side='left', padx=10, anchor='n')
         ttk.Label(self.frame_izq_pf, text="Profesor", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
         
-        self.combo_profesores = ttk.Combobox(self.frame_izq_pf, width=40, font=("Roboto", 9), state='readonly')
+        self.combo_profesores = ttk.Combobox(self.frame_izq_pf, width=30, font=("Roboto", 9), state='readonly')
         self.combo_profesores.pack(pady=3)
-        self.combo_profesores.bind("<<ComboboxSelected>>", self.actualizar_vista_previa)
+        self.combo_profesores.bind("<<ComboboxSelected>>", lambda e: self.actualizar_vista_previa())
         
-  
+        ttk.Button(self.frame_izq_pf, text="Asignar Manualmente", command=self.asignar_profesor_materia).pack(pady=2)
 
-#correccion de elementos a filas
-        frame_contenedor_mt = ttk.Frame(self.frame_izq, style='blue.TFrame')
-        frame_contenedor_mt.pack(fill='x', pady=5)
+        self.frame_der_pf = ttk.Frame(frame_contenedor2, style='blue.TFrame')
+        self.frame_der_pf.pack(side='left', padx=10, anchor='n')
+        ttk.Label(self.frame_der_pf, text="Materia", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
         
-        self.frame_izq_mt = ttk.Frame(frame_contenedor_mt, style='blue.TFrame')
-        self.frame_izq_mt.pack(side='left', pady=10, anchor='n')
-        #self.frame_izq_mt.pack(fill='x', pady=10)
-        ttk.Label(self.frame_izq_mt, text="Materia", background='#0A0F1E', foreground='white', font=("Roboto", 10)).pack(pady=3)
-        
-        self.combo_materias = ttk.Combobox(self.frame_izq_mt, width=40, font=("Roboto", 9), state='readonly')
+        self.combo_materias = ttk.Combobox(self.frame_der_pf, width=30, font=("Roboto", 9), state='readonly')
         self.combo_materias.pack(pady=3)
-        self.combo_materias.bind("<<ComboboxSelected>>", lambda e: (self.mostrar_semestre_de_materia(e), self.actualizar_vista_previa(e)))
-        
-        ttk.Button(self.frame_izq_mt, text="Asignar Manualmente", command=self.asignar_profesor_materia).pack(pady=2)
+        self.combo_materias.bind("<<ComboboxSelected>>", lambda e: (self.mostrar_semestre_de_materia(e), self.actualizar_vista_previa()))
 
         frame_contenedor3 = ttk.Frame(self.frame_izq, style='blue.TFrame')
         frame_contenedor3.pack(fill='x', pady=10)
@@ -178,7 +167,6 @@ class VentanaGestion:
         self.frame_tablas = ttk.Frame(self.frame_der, style='blue.TFrame')
         self.frame_tablas.pack(padx=10, anchor='n', fill='both', expand=True)
 
-        # --- NUEVO: Columna de Estado ---
         columnas = ('Profesor', 'materia', 'Estado')
         self.tabla_profesores = ttk.Treeview(self.frame_tablas, columns=columnas, show='headings', height=20)
         self.tabla_profesores.column('Profesor', anchor='w', width=180)
@@ -235,7 +223,6 @@ class VentanaGestion:
                 cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
                 cur.execute("DELETE FROM asignaciones WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
                 conn.commit()
-                
                 messagebox.showinfo("Éxito", "Asignación eliminada correctamente.")
                 self.asignacion_seleccionada_id = None 
                 self.actualizar_vista_previa()
@@ -274,10 +261,9 @@ class VentanaGestion:
         if not item: return
         
         v = self.tabla_profesores.item(item, "values")
-        if len(v) < 4: return # Ahora verificamos que traiga los 4 elementos (ID en pos 3)
+        if len(v) < 4: return
         
         self.asignacion_seleccionada_id = v[3] 
-        
         p_str = v[0] 
         m_g_str = v[1] 
         
@@ -318,15 +304,28 @@ class VentanaGestion:
             
         try:
             generador = GeneradorHorarios(conexion)
-            cantidad = generador.ejecutar(modo=modo_seleccionado)
-            messagebox.showinfo("Éxito", f"Se generaron {cantidad} horarios correctamente en modo '{modo_seleccionado}'.")
+            resultado = generador.ejecutar(modo=modo_seleccionado)
+            if isinstance(resultado, tuple):
+                cantidad, alertas = resultado
+            else:
+                cantidad = resultado
+                alertas = []
+            
+            if alertas:
+                mensaje = f"Se asignaron {cantidad} horarios correctamente.\n\nSin embargo, hubo conflictos con algunas materias:\n\n"
+                for a in alertas[:6]: 
+                    mensaje += f"• {a}\n\n"
+                if len(alertas) > 6:
+                    mensaje += f"... y {len(alertas) - 6} asignaciones más.\n\n"
+                mensaje += "Sugerencia: Modifica el horario/días del profesor desde la pestaña 'Gestionar'."
+                messagebox.showwarning("Asignación con Conflictos", mensaje)
+            else:
+                messagebox.showinfo("Éxito", f"¡Perfecto! Se generaron {cantidad} horarios sin ningún conflicto en modo '{modo_seleccionado}'.")
             
             self.notebook.select(self.pes1)
             modo_actual = self.combo_vista_horarios.get() if hasattr(self, 'combo_vista_horarios') else "Salón"
             mem_grafico.inicializar_y_llenar_tensor(modo_actual)
-            self.actualizar_vista_previa()
-            self.s_idx = 0
-            self.actualizar_tabla_grafica()
+            self.cambiar_modo_vista() 
             
         except Exception as e:
             messagebox.showerror("Error Crítico", f"Falló la generación de horarios: {e}")
@@ -409,13 +408,7 @@ class VentanaGestion:
 
     def limpiar_filtros(self):
         self.asignacion_seleccionada_id = None 
-        self.combo_profesores.set('')
-        self.combo_materias.set('')
-        self.combo_grupos.set('')
-        #self.combo_periodos.set('')
-        #self.combo_semestre.set('')
-        self.combo_estado_filtro.set('Todos')
-        self.actualizar_vista_previa()
+        self.actualizar_vista_previa(mostrar_todo=True)
 
     def filtrar_materias_por_periodo(self, event=None):
         periodo = self.combo_periodos.get()
@@ -533,11 +526,17 @@ class VentanaGestion:
             cursor.close()
             conexion.close()
 
-    def actualizar_vista_previa(self, event=None):
-        prof_id = self._obtener_id_valido(self.combo_profesores.get()) if hasattr(self, 'combo_profesores') else None
-        mat_id = self._obtener_id_valido(self.combo_materias.get()) if hasattr(self, 'combo_materias') else None
-        grup_id = self._obtener_id_valido(self.combo_grupos.get(), es_grupo=True) if hasattr(self, 'combo_grupos') else None
-        estado_filtro = self.combo_estado_filtro.get() if hasattr(self, 'combo_estado_filtro') else "Todos"
+    def actualizar_vista_previa(self, event=None, mostrar_todo=False):
+        if mostrar_todo:
+            prof_id = None
+            mat_id = None
+            grup_id = None
+            estado_filtro = "Todos"
+        else:
+            prof_id = self._obtener_id_valido(self.combo_profesores.get()) if hasattr(self, 'combo_profesores') else None
+            mat_id = self._obtener_id_valido(self.combo_materias.get()) if hasattr(self, 'combo_materias') else None
+            grup_id = self._obtener_id_valido(self.combo_grupos.get(), es_grupo=True) if hasattr(self, 'combo_grupos') else None
+            estado_filtro = self.combo_estado_filtro.get() if hasattr(self, 'combo_estado_filtro') else "Todos"
 
         if hasattr(self, 'tabla_profesores'):
             for item in self.tabla_profesores.get_children():
@@ -548,7 +547,6 @@ class VentanaGestion:
         cursor = conexion.cursor()
 
         try:
-            # --- NUEVO: Traemos el campo estado para mostrarlo y filtrarlo ---
             sql = """
                 SELECT 
                     a.asignacion_id,
@@ -563,6 +561,7 @@ class VentanaGestion:
                 WHERE 1=1 
             """
             params = []
+            
             if prof_id and not self.asignacion_seleccionada_id:
                 sql += " AND a.profesor_id = %s"
                 params.append(prof_id)
@@ -587,7 +586,6 @@ class VentanaGestion:
                     p_str = f"{row[1]} - {row[2]}"
                     m_str = f"{row[3]} - {row[4]} ({row[5]})"
                     estado_str = str(row[6]).upper()
-                    
                     self.tabla_profesores.insert('', 'end', values=(p_str, m_str, estado_str, asig_id))
             elif hasattr(self, 'tabla_profesores'):
                 self.tabla_profesores.insert('', 'end', values=("(No hay resultados)", "", "", ""))
@@ -616,66 +614,131 @@ class VentanaGestion:
         frame_controles = ttk.Frame(contenedor, style='blue.TFrame')
         frame_controles.pack(fill='x', side='bottom', pady=5)
 
-        ttk.Button(frame_controles, text="◀ Anterior", command=self.anterior_salon).pack(side='left', padx=10)
-        ttk.Button(frame_controles, text="Siguiente ▶", command=self.siguiente_salon).pack(side='left', padx=10)
+        ttk.Button(frame_controles, text="◀ Ant.", command=self.anterior_salon, width=6).pack(side='left', padx=2)
+        ttk.Button(frame_controles, text="Sig. ▶", command=self.siguiente_salon, width=6).pack(side='left', padx=2)
         
-        ttk.Label(frame_controles, text="Ver por:", background='#0A0F1E', foreground='white', font=("Roboto", 10, "bold")).pack(side='left', padx=(30, 5))
-        self.combo_vista_horarios = ttk.Combobox(frame_controles, values=["Salón", "Profesor", "Grupo"], state="readonly", width=12, font=("Roboto", 10))
+        ttk.Label(frame_controles, text="Ver por:", background='#0A0F1E', foreground='white', font=("Roboto", 9, "bold")).pack(side='left', padx=(10, 2))
+        self.combo_vista_horarios = ttk.Combobox(frame_controles, values=["Salón", "Profesor", "Grupo"], state="readonly", width=8, font=("Roboto", 9))
         self.combo_vista_horarios.set("Salón")
         self.combo_vista_horarios.pack(side='left')
         self.combo_vista_horarios.bind("<<ComboboxSelected>>", self.cambiar_modo_vista)
 
-        ttk.Button(frame_controles, text="Descargar PDF Completo", command=self.exportar_pdf_completo).pack(side='right', padx=10)
-        ttk.Button(frame_controles, text="Descargar PNG", command=self.guardar_captura).pack(side='right', padx=10)
+        self.lbl_sem_filtro = ttk.Label(frame_controles, text="Semestre:", background='#0A0F1E', foreground='white', font=("Roboto", 9, "bold"))
+        self.lbl_sem_filtro.pack(side='left', padx=(10, 2))
+        
+        self.combo_semestre_filtro = ttk.Combobox(frame_controles, values=["Todos", "1", "2", "3", "4", "5", "6", "7", "8", "9"], state="readonly", width=6, font=("Roboto", 9))
+        self.combo_semestre_filtro.set("Todos")
+        self.combo_semestre_filtro.pack(side='left')
+        self.combo_semestre_filtro.bind("<<ComboboxSelected>>", self.actualizar_combo_ir_a)
 
-        self.actualizar_tabla_grafica()
+        ttk.Label(frame_controles, text="Seleccionar:", background='#0A0F1E', foreground='white', font=("Roboto", 9, "bold")).pack(side='left', padx=(10, 2))
+        self.combo_ir_a = ttk.Combobox(frame_controles, state="readonly", width=15, font=("Roboto", 9))
+        self.combo_ir_a.pack(side='left')
+        self.combo_ir_a.bind("<<ComboboxSelected>>", self.saltar_a_entidad)
 
-    def siguiente_salon(self):
-        max_idx = len(mem_grafico.entidades_actuales)
-        if max_idx > 0:
-            self.s_idx = (self.s_idx + 1) % max_idx
-            self.actualizar_tabla_grafica()
+        ttk.Button(frame_controles, text="PDF", command=self.exportar_pdf_completo, width=6).pack(side='right', padx=2)
+        ttk.Button(frame_controles, text="PNG", command=self.guardar_captura, width=6).pack(side='right', padx=2)
+        # --- NUEVO BOTÓN EXCEL ---
+        ttk.Button(frame_controles, text="Excel", command=self.exportar_excel, width=6).pack(side='right', padx=2)
 
-    def anterior_salon(self):
-        max_idx = len(mem_grafico.entidades_actuales)
-        if max_idx > 0:
-            self.s_idx = (self.s_idx - 1) % max_idx
-            self.actualizar_tabla_grafica()
+        self.cambiar_modo_vista() 
 
     def cambiar_modo_vista(self, event=None):
         modo = self.combo_vista_horarios.get()
         mem_grafico.inicializar_y_llenar_tensor(modo)
         self.s_idx = 0
+        
+        if modo == "Grupo":
+            self.combo_semestre_filtro.config(state="readonly")
+        else:
+            self.combo_semestre_filtro.set("Todos")
+            self.combo_semestre_filtro.config(state="disabled")
+            
+        self.actualizar_combo_ir_a()
+
+    def actualizar_combo_ir_a(self, event=None):
+        modo = self.combo_vista_horarios.get()
+        semestre = self.combo_semestre_filtro.get()
+        
+        self.entidades_filtradas = []
+        if hasattr(mem_grafico, 'entidades_actuales') and mem_grafico.entidades_actuales:
+            for e in mem_grafico.entidades_actuales:
+                nombre = e[0]
+                if modo == "Grupo" and semestre != "Todos":
+                    if nombre in self.grupos_por_semestre.get(semestre, []):
+                        self.entidades_filtradas.append(e)
+                else:
+                    self.entidades_filtradas.append(e)
+                    
+        nombres = [e[0] for e in self.entidades_filtradas]
+        self.combo_ir_a['values'] = nombres
+        
+        if self.entidades_filtradas:
+            if not any(e[1] == self.s_idx for e in self.entidades_filtradas):
+                self.s_idx = self.entidades_filtradas[0][1]
+                
+            current_name = next(e[0] for e in self.entidades_filtradas if e[1] == self.s_idx)
+            self.combo_ir_a.set(current_name)
+        else:
+            self.combo_ir_a.set("")
+            
         self.actualizar_tabla_grafica()
+
+    def saltar_a_entidad(self, event=None):
+        nombre_seleccionado = self.combo_ir_a.get()
+        if not nombre_seleccionado: return
+        
+        for e in self.entidades_filtradas:
+            if e[0] == nombre_seleccionado:
+                self.s_idx = e[1]
+                self.actualizar_tabla_grafica()
+                break
+
+    def siguiente_salon(self):
+        if not hasattr(self, 'entidades_filtradas') or not self.entidades_filtradas: return
+        idx_in_filtered = next((i for i, e in enumerate(self.entidades_filtradas) if e[1] == self.s_idx), -1)
+        if idx_in_filtered != -1:
+            next_idx = (idx_in_filtered + 1) % len(self.entidades_filtradas)
+            self.s_idx = self.entidades_filtradas[next_idx][1]
+            self.combo_ir_a.set(self.entidades_filtradas[next_idx][0])
+            self.actualizar_tabla_grafica()
+
+    def anterior_salon(self):
+        if not hasattr(self, 'entidades_filtradas') or not self.entidades_filtradas: return
+        idx_in_filtered = next((i for i, e in enumerate(self.entidades_filtradas) if e[1] == self.s_idx), -1)
+        if idx_in_filtered != -1:
+            next_idx = (idx_in_filtered - 1) % len(self.entidades_filtradas)
+            self.s_idx = self.entidades_filtradas[next_idx][1]
+            self.combo_ir_a.set(self.entidades_filtradas[next_idx][0])
+            self.actualizar_tabla_grafica()
 
     def exportar_pdf_completo(self):
         modo = self.combo_vista_horarios.get()
-        
-        # --- NUEVO: Detectar ruta de Descargas dinámicamente ---
         ruta_descargas = os.path.join(os.path.expanduser('~'), 'Downloads')
         nombre_archivo = f"Horarios_Plasem_{modo}_{datetime.datetime.now().strftime('%H%M%S')}.pdf"
         ruta_completa = os.path.join(ruta_descargas, nombre_archivo)
         
-        if not mem_grafico.entidades_actuales:
-            messagebox.showwarning("Aviso", "No hay datos para exportar.")
+        if not hasattr(self, 'entidades_filtradas') or not self.entidades_filtradas:
+            messagebox.showwarning("Aviso", "No hay datos para exportar con los filtros actuales.")
             return
 
-        respuesta = messagebox.askyesno("Confirmar", f"¿Deseas generar un PDF de múltiples páginas con todos los horarios por {modo}?\nSe guardará en tu carpeta de Descargas.")
+        respuesta = messagebox.askyesno("Confirmar", f"¿Deseas generar un PDF de los horarios mostrados actualmente?\nSe guardará en tu carpeta de Descargas en formato Blanco y Negro.")
         if not respuesta: return
 
         try:
             indice_respaldo = self.s_idx
-            with PdfPages(ruta_completa) as pdf: # Guardamos en la nueva ruta
-                for s in mem_grafico.entidades_actuales:
+            with PdfPages(ruta_completa) as pdf: 
+                for s in self.entidades_filtradas:
                     self.s_idx = s[1]
-                    self.actualizar_tabla_grafica() 
+                    self.actualizar_tabla_grafica(modo_impresion=True)
                     pdf.savefig(self.fig, bbox_inches='tight')
                     
             self.s_idx = indice_respaldo
-            self.actualizar_tabla_grafica()
+            self.actualizar_tabla_grafica(modo_impresion=False)
             messagebox.showinfo("Éxito", f"Reporte PDF guardado exitosamente en:\n{ruta_completa}")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el PDF:\n{e}")
+            self.actualizar_tabla_grafica(modo_impresion=False)
 
     def guardar_captura(self):
         if not hasattr(mem_grafico, 'entidades_actuales') or not mem_grafico.entidades_actuales:
@@ -686,29 +749,89 @@ class VentanaGestion:
             nombre_real = next(e[0] for e in mem_grafico.entidades_actuales if e[1] == self.s_idx)
             modo = mem_grafico.modo_actual
             nombre_seguro = "".join([c if c.isalnum() else "_" for c in nombre_real])
-            
-            # --- NUEVO: Detectar ruta de Descargas dinámicamente ---
             ruta_descargas = os.path.join(os.path.expanduser('~'), 'Downloads')
             nombre_archivo = f"Horario_{modo}_{nombre_seguro}_{datetime.datetime.now().strftime('%H%M%S')}.png"
             ruta_completa = os.path.join(ruta_descargas, nombre_archivo)
             
-            self.fig.savefig(ruta_completa, bbox_inches='tight', dpi=200) # Guardamos en la nueva ruta
+            self.actualizar_tabla_grafica(modo_impresion=True)
+            self.fig.savefig(ruta_completa, bbox_inches='tight', dpi=200) 
+            self.actualizar_tabla_grafica(modo_impresion=False)
+            
             messagebox.showinfo("Captura Guardada", f"Se ha guardado la imagen exitosamente en:\n{ruta_completa}")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo guardar la captura:\n{e}")
+            self.actualizar_tabla_grafica(modo_impresion=False)
+
+    # --- NUEVA FUNCIÓN EXCEL ---
+    def exportar_excel(self):
+        try:
+            import pandas as pd
+        except ImportError:
+            messagebox.showerror("Error de dependencias", "Para exportar a Excel necesitas instalar pandas y openpyxl.\n\nAbre tu terminal en VS Code y ejecuta:\npip install pandas openpyxl")
+            return
+
+        modo = self.combo_vista_horarios.get()
+        ruta_descargas = os.path.join(os.path.expanduser('~'), 'Downloads')
+        nombre_archivo = f"Horarios_Plasem_{modo}_{datetime.datetime.now().strftime('%H%M%S')}.xlsx"
+        ruta_completa = os.path.join(ruta_descargas, nombre_archivo)
+        
+        if not hasattr(self, 'entidades_filtradas') or not self.entidades_filtradas:
+            messagebox.showwarning("Aviso", "No hay datos para exportar con los filtros actuales.")
+            return
+
+        respuesta = messagebox.askyesno("Confirmar Excel", f"¿Deseas generar un archivo Excel de los horarios mostrados?\n\nCada horario ({modo}) será una pestaña (hoja) independiente en el archivo.")
+        if not respuesta: return
 
         try:
-            nombre_real = next(e[0] for e in mem_grafico.entidades_actuales if e[1] == self.s_idx)
-            modo = mem_grafico.modo_actual
-            nombre_seguro = "".join([c if c.isalnum() else "_" for c in nombre_real])
-            nombre_archivo = f"Horario_{modo}_{nombre_seguro}_{datetime.datetime.now().strftime('%H%M%S')}.png"
+            columnas = ['Hora', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado']
             
-            self.fig.savefig(nombre_archivo, bbox_inches='tight', dpi=200)
-            messagebox.showinfo("Captura Guardada", f"Se ha guardado la imagen exitosamente como:\n{nombre_archivo}")
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo guardar la captura:\n{e}")
+            # Motor para escribir múltiples hojas en un solo Excel
+            with pd.ExcelWriter(ruta_completa, engine='openpyxl') as writer:
+                for e in self.entidades_filtradas:
+                    s_idx = e[1]
+                    nombre_real = str(e[0])
+                    
+                    # Limpiar el nombre de la hoja para que Excel no marque error (máximo 31 caracteres y sin símbolos extraños)
+                    nombre_hoja = "".join([c for c in nombre_real if c not in r'\/*?:[]'])[:31]
+                    if not nombre_hoja: nombre_hoja = f"Hoja_{s_idx}"
+                    
+                    datos = []
+                    for row_idx in range(1, mem_grafico.intervalos):
+                        fila = []
+                        for col_idx in range(7):
+                            try:
+                                val = mem_grafico.tensor_actual[s_idx, row_idx, col_idx]
+                                # Reemplazamos los saltos de línea (\n) con un espacio para que se acomode bien en la celda
+                                val_limpio = str(val).replace('\n', ' - ') if val else ''
+                                fila.append(val_limpio)
+                            except IndexError:
+                                fila.append('')
+                        datos.append(fila)
+                        
+                    df = pd.DataFrame(datos, columns=columnas)
+                    df.to_excel(writer, sheet_name=nombre_hoja, index=False)
+                    
+                    # Auto-ajustar el ancho de las columnas en la hoja
+                    worksheet = writer.sheets[nombre_hoja]
+                    for col in worksheet.columns:
+                        max_length = 0
+                        col_letter = col[0].column_letter
+                        for cell in col:
+                            try: 
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+                        
+                        # Limitar el ancho máximo a 40 para que no sea excesivo
+                        adjusted_width = min((max_length + 2), 40)
+                        worksheet.column_dimensions[col_letter].width = adjusted_width
 
-    def actualizar_tabla_grafica(self):
+            messagebox.showinfo("Éxito", f"Reporte Excel guardado exitosamente en:\n{ruta_completa}")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo generar el Excel:\n{e}")
+
+    def actualizar_tabla_grafica(self, modo_impresion=False):
         self.ax.clear()
         self.ax.axis('off')
 
@@ -721,6 +844,16 @@ class VentanaGestion:
         grid_area_h = 1.0 - header_h
         interval_h = grid_area_h / num_horarios 
         
+        bg_fig = 'white' if modo_impresion else '#0A0F1E'
+        text_title = 'black' if modo_impresion else 'white'
+        bg_header = '#e0e0e0' if modo_impresion else '#2f4a23' 
+        text_header = 'black' if modo_impresion else 'white'
+        bg_time_col = '#f5f5f5' if modo_impresion else '#1a1a1a' 
+        text_time = 'black' if modo_impresion else 'white'
+        edge_color = 'black'
+        
+        self.fig.patch.set_facecolor(bg_fig)
+        
         titulo_texto = "HORARIO" 
         if mem_grafico.entidades_actuales:
             try:
@@ -730,15 +863,15 @@ class VentanaGestion:
             except StopIteration:
                 pass
         
-        self.ax.set_title(titulo_texto, color="white", pad=10, fontsize=12, fontweight='bold')
+        self.ax.set_title(titulo_texto, color=text_title, pad=10, fontsize=12, fontweight='bold')
 
         day_names = ['Hora', 'Lunes', 'Martes', 'Miér', 'Juev', 'Vier', 'Sáb']
         x_curr = 0.0
         for i, name in enumerate(day_names):
             self.ax.add_patch(Rectangle((x_curr, 1.0 - header_h), col_widths[i], header_h, 
-                                      facecolor='#2f4a23', edgecolor='white', linewidth=1, zorder=5))
+                                      facecolor=bg_header, edgecolor=edge_color, linewidth=1, zorder=5))
             self.ax.text(x_curr + col_widths[i]/2, 1.0 - header_h/2, name,
-                        ha='center', va='center', fontweight='bold', color='white', fontsize=10, zorder=6)
+                        ha='center', va='center', fontweight='bold', color=text_header, fontsize=10, zorder=6)
             x_curr += col_widths[i]
 
         x_grid = 0.0
@@ -746,20 +879,21 @@ class VentanaGestion:
             y_grid = 1.0 - header_h
             for row_idx in range(1, mem_grafico.intervalos):
                 y_pos = y_grid - interval_h
-                bg_color = '#1a1a1a' if col_idx == 0 else 'white'
+                bg_color = bg_time_col if col_idx == 0 else 'white'
                 self.ax.add_patch(Rectangle((x_grid, y_pos), col_widths[col_idx], interval_h, 
-                                          facecolor=bg_color, edgecolor='black', linewidth=0.5, zorder=1))
+                                          facecolor=bg_color, edgecolor=edge_color, linewidth=0.5, zorder=1))
                 
                 if col_idx == 0 and mem_grafico.tensor_actual is not None:
                     try:
                         texto_hora = mem_grafico.tensor_actual[self.s_idx, row_idx, 0]
                         self.ax.text(x_grid + col_widths[col_idx]/2, y_pos + interval_h/2, 
-                                    texto_hora, ha='center', va='center', color='white', fontsize=8, zorder=2)
+                                    texto_hora, ha='center', va='center', color=text_time, fontsize=8, zorder=2)
                     except IndexError: pass
                 y_grid -= interval_h
             x_grid += col_widths[col_idx]
 
         x_materia = col_widths[0] 
+        import textwrap 
         
         for col_idx in range(1, 7):
             r_ptr = 1 
@@ -781,7 +915,7 @@ class VentanaGestion:
                     y_pos_materia = y_base_area - (r_ptr) * interval_h
                     
                     self.ax.add_patch(Rectangle((x_materia, y_pos_materia), col_widths[col_idx], h_bloque,
-                                              facecolor='white', edgecolor='black', linewidth=1.2, zorder=3))
+                                              facecolor='white', edgecolor=edge_color, linewidth=1.2, zorder=3))
                     
                     lineas_originales = str(materia).split('\n')
                     lineas_ajustadas = []
