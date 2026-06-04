@@ -1,5 +1,6 @@
 import mysql.connector
 from tkinter import messagebox
+from contextlib import contextmanager
 
 def get_conexion():
     try:
@@ -15,8 +16,40 @@ def get_conexion():
         messagebox.showerror("Error de Conexión", f"No se pudo conectar a la base de datos: {err}")
         return None
 
-"""
-            DATOS DE CONEXION ALEXIS
-            password="123456",
-            database="bd_seso",
-"""
+@contextmanager
+def obtener_cursor():
+    conn = get_conexion()
+    if conn is None:
+        yield None
+        return
+    cursor = conn.cursor()
+    try:
+        yield cursor, conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn.is_connected():
+            conn.close()
+
+@contextmanager
+def obtener_cursor_dict():
+    conn = get_conexion()
+    if conn is None:
+        yield None
+        return
+    cursor = conn.cursor(dictionary=True)
+    try:
+        yield cursor, conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn.is_connected():
+            conn.close()

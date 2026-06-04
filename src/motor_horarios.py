@@ -450,26 +450,71 @@ class GeneradorHorarios:
                                 for ht in horarios_temporales:
                                     self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
-            # --- NUEVO: Motor de Diagnóstico si falló la asignación ---
             if not asignado_completamente:
-                razon = "Conflicto Tetris (Choque de clases del profesor/grupo, o salones llenos)."
+                prof_id = asignacion.get('profesor_id', '?')
+                grupo_id = asignacion.get('grupo_id', '?')
+                mat_id = asignacion.get('materia_id', '?')
+                tipo_mat = asignacion.get('tipo_materia', 'Normal')
+                es_en_linea = str(asignacion.get('en_linea', 'NO')).upper() == 'SI'
+                sugerencias = []
+                causas = []
                 
                 try:
-                    if asignacion.get('disponible_inicio') and asignacion.get('disponible_fin') and asignacion.get('dias_disponibles'):
-                        s_inicio = self._hora_a_slot(asignacion['disponible_inicio'])
-                        s_fin = self._hora_a_slot(asignacion['disponible_fin'])
-                        num_dias = len(asignacion['dias_disponibles'].split(','))
-                        
-                        horas_maximas_profesor = ((s_fin - s_inicio) / 2) * num_dias
-                        
-                        if horas_totales > horas_maximas_profesor:
-                            razon = f"¡Límite físico! El perfil del profe ofrece {horas_maximas_profesor} hrs/sem, pero la materia pide {horas_totales} hrs."
+                    s_inicio = self._hora_a_slot(asignacion['disponible_inicio'])
+                    s_fin = self._hora_a_slot(asignacion['disponible_fin'])
+                    num_dias = len(asignacion['dias_disponibles'].split(','))
+                    dispon_slots = (s_fin - s_inicio) * num_dias
+                    hrs_profesor = dispon_slots / 2
+                    
+                    if horas_totales > hrs_profesor:
+                        causas.append(f"El profesor solo tiene {hrs_profesor:.0f}h disponibles/semana, pero la materia exige {horas_totales}h.")
+                        sugerencias.append(f"Reducir horas de la materia ({mat_id}) a máximo {int(hrs_profesor)}h, o ampliar el horario del profesor ({prof_id}).")
+                    
+                    if not es_en_linea and self.salones:
+                        salones_compatibles = [s for s in self.salones
+                                              if tipo_mat in ['tecnológica', 'tecnologica', 'laboratorio']
+                                              and self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica', 'laboratorio']
+                                              or tipo_mat == 'normal'
+                                              and self.tipos_salones.get(s, 'Normal').lower() == 'normal']
+                        if not salones_compatibles:
+                            causas.append(f"No hay salones de tipo '{tipo_mat}' disponibles.")
+                            if tipo_mat in ['tecnológica', 'tecnologica', 'laboratorio']:
+                                sugerencias.append(f"Registrar un salón de tipo '{tipo_mat}' o cambiar el tipo de la materia a 'Normal'.")
+                            else:
+                                sugerencias.append("Registrar más salones de tipo 'Normal'.")
+                    
+                    if num_dias == 1 and horas_totales > 4:
+                        causas.append(f"El profesor solo tiene 1 día disponible, pero la materia necesita {horas_totales}h en bloque.")
+                        sugerencias.append(f"Distribuir la materia en mínimo {int(horas_totales/4 + 1)} días, o agregar más días a la disponibilidad del profesor ({prof_id}).")
+                    
+                    for dia in self.dias_disponibles_lista(asignacion):
+                        slots_usados_prof = sum(1 for (d, p, s) in self.ocupacion_profesores
+                                               if d == dia and p == prof_id)
+                        if slots_usados_prof >= (s_fin - s_inicio):
+                            causas.append(f"El profesor ya está completamente ocupado el día {dia}.")
+                            sugerencias.append(f"Agregar más días de disponibilidad al profesor ({prof_id}).")
+                
                 except Exception:
                     pass
                 
-                alerta = f"ID:{asignacion['asignacion_id']} | Prof: {asignacion.get('profesor_id')} | Grupo: {asignacion.get('grupo_id')}\n-> {razon}"
+                if not causas:
+                    if es_en_linea:
+                        causas.append("No se encontró espacio en línea disponible (slots 18-28) sin conflictos con clases presenciales.")
+                        sugerencias.append("Ampliar el horario del profesor o reducir horas de la materia.")
+                    else:
+                        causas.append("No hay salones disponibles en los horarios compatibles con el profesor y el grupo.")
+                        sugerencias.append("Revisar disponibilidad del profesor, o agregar más salones.")
+                
+                razon = " | ".join(causas)
+                sug_texto = "\n-> Sugerencias: " + " | ".join(sugerencias[:3])
+                
+                alerta = (
+                    f"ID:{asignacion['asignacion_id']} | Prof: {prof_id} | "
+                    f"Materia: {mat_id} ({horas_totales}h, {tipo_mat}) | Grupo: {grupo_id}\n"
+                    f"-> {razon}{sug_texto}"
+                )
                 alertas_generadas.append(alerta)
-                print(f"ALERTA: No se pudo asignar ID {asignacion['asignacion_id']} ({horas_totales} hrs)")
+                print(f"ALERTA: No se pudo asignar ID {asignacion['asignacion_id']} ({horas_totales}h) - {razon}")
 
         self.guardar_en_bd(horarios_generados, modo)
         
@@ -492,6 +537,12 @@ class GeneradorHorarios:
         
         if not es_en_linea:
             self.uso_salones[salon_id] -= duracion_bloques
+
+    def dias_disponibles_lista(self, asignacion):
+        try:
+            return [d.strip() for d in asignacion['dias_disponibles'].split(',') if d.strip()]
+        except Exception:
+            return ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
 
     def guardar_en_bd(self, lista_horarios, modo="completo"):
         try:

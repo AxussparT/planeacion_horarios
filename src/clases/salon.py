@@ -4,48 +4,32 @@ import mysql.connector
 
 class salon:
     def __init__(self, numero_aula, capacidad, tipo):
-        self.numero_aula = numero_aula
-        self.capacidad = capacidad
-        self.tipo = tipo
-        print(f"guardado en el constructor: {self.numero_aula}")
+        self.numero_aula = str(numero_aula).strip()
+        self.capacidad = str(capacidad).strip()
+        self.tipo = str(tipo).strip()
         
-        # Esta línea ya está correcta
+        if not self.capacidad.isdigit():
+            messagebox.showerror("Error de Datos", "La capacidad debe ser un número válido.")
+            return
+        
+        if not self.numero_aula:
+            messagebox.showerror("Error de Datos", "El número de aula es obligatorio.")
+            return
+        
         self.procesar_datos()
         
     def procesar_datos(self):
-            print("Subiendo datos a la base de datos...")
-            conexion = None # Variable local
-            cursor = None
-            
+        from src.conexion import obtener_cursor
+        with obtener_cursor() as ctx:
+            if ctx is None:
+                return False
+            cur, conn = ctx
             try:
-                # 2. ¡AQUÍ ESTÁ LA CORRECCIÓN!
-                # Llama a la función 'get_conexion()' que importaste
-                conexion = get_conexion() 
-                
-                # Si la conexión falló (ej. DB apagada), get_conexion() retorna None
-                if conexion is None:
-                    print("Error: No se pudo obtener conexión.")
-                    return False
-
-                cursor = conexion.cursor()
-                
-                # ... (el resto de tu código SQL) ...
                 sql = "INSERT INTO salones (salon_id, capacidad, tipo) VALUES (%s, %s, %s)"
-                valores = (self.numero_aula, self.capacidad, self.tipo)
-                
-                cursor.execute(sql, valores)
-                conexion.commit()
-                
-                messagebox.showinfo("Éxito", f"Salón con el número '{self.numero_aula}' guardado correctamente")
+                cur.execute(sql, (self.numero_aula, self.capacidad, self.tipo))
+                messagebox.showinfo("Éxito", f"Salón '{self.numero_aula}' guardado correctamente")
                 return True
-            
             except mysql.connector.Error as err:
-                 messagebox.showerror("Error", f"Error al guardar los datos del salón: {err}")
-                 return False
-                
-            finally:
-                if cursor is not None:
-                    cursor.close()
-                if conexion is not None and conexion.is_connected():
-                    conexion.close()
-                    print("Conexión cerrada.")
+                conn.rollback()
+                messagebox.showerror("Error", f"Error al guardar el salón: {err}")
+                return False
