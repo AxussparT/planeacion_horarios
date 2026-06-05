@@ -66,16 +66,17 @@ class VentanaGestion:
         if not self._is_embedded:
             self.ventana.protocol("WM_DELETE_WINDOW", self._confirmar_cierre)
         self.construir_interfaz()
-        self.ventana.after(100, self._post_init)
+        self._post_init()
         if not self._is_embedded:
             self.ventana.wait_window()
 
     def _cargar_grupos_desde_bd(self):
         grupos = {}
+        fallback = self._grupos_fallback()
         try:
             with obtener_cursor() as ctx:
                 if ctx is None:
-                    return self._grupos_fallback()
+                    return fallback
                 cur, conn = ctx
                 cur.execute("SELECT grupo_id FROM grupos ORDER BY grupo_id")
                 filas = cur.fetchall()
@@ -89,7 +90,17 @@ class VentanaGestion:
                     grupos[sem].append(gid)
         except Exception as e:
             print(f"Error cargando grupos desde BD: {e}")
-        return grupos if grupos else self._grupos_fallback()
+            
+        # FIX: Combinar inteligentemente los grupos de la BD con tu fallback
+        # Así nunca "olvida" el S1B, S1C, etc., aunque solo el S1A esté en la BD.
+        for sem, grps in fallback.items():
+            if sem not in grupos:
+                grupos[sem] = []
+            for g in grps:
+                if g not in grupos[sem]:
+                    grupos[sem].append(g)
+                    
+        return grupos
     
     def _grupos_fallback(self):
         return {
@@ -445,12 +456,12 @@ class VentanaGestion:
                 cantidad, alertas = datos
                 if alertas:
                     partes = []
-                    for a in alertas[:6]:
-                        partes.append(f"▸ {a}\n")
-                    if len(alertas) > 6:
-                        partes.append(f"... y {len(alertas) - 6} asignaciones más.\n")
+                    for i, a in enumerate(alertas[:5], 1):
+                        partes.append(f"─── Conflicto #{i} ───\n{a}\n")
+                    if len(alertas) > 5:
+                        partes.append(f"→ ... y {len(alertas) - 5} conflicto(s) más.\n")
                     mensaje = (
-                        f"Se asignaron {cantidad} horarios.\n\n"
+                        f"Se asignaron {cantidad} horarios.\n"
                         f"Hubo conflictos con {len(alertas)} materia(s):\n\n"
                         + "".join(partes)
                     )
@@ -488,9 +499,16 @@ class VentanaGestion:
                 except mysql.connector.Error as err:
                     print(f"Error filtrando grupos: {err}")
 
+        # FIX: Limpiar el texto visual del combobox antes de cargar nuevos valores
+        self.combo_grupos.set('') 
         self.combo_grupos['values'] = grupos_filtrados
-        if grupos_filtrados and not self.combo_grupos.get():
+        
+        # Seleccionar automáticamente el primer grupo si hay disponibles
+        if grupos_filtrados:
             self.combo_grupos.set(grupos_filtrados[0])
+        else:
+            # Mostrar un mensaje si todos los grupos de ese semestre ya tienen esta materia
+            self.combo_grupos.set("grupos llenos")
 
     def cargar_combos_bd(self):
         with obtener_cursor() as ctx:
@@ -533,6 +551,15 @@ class VentanaGestion:
                     self.mostrar_semestre_de_materia()
 
                 self.actualizar_vista_previa()
+
+                if not self.combo_grupos['values']:
+                    for sem in sorted(self.grupos_por_semestre.keys(), key=int):
+                        g = self.grupos_por_semestre[sem]
+                        if g:
+                            self.combo_grupos['values'] = g
+                            if not self.combo_grupos.get():
+                                self.combo_grupos.set(g[0])
+                            break
             except mysql.connector.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error BD", f"Error cargando combos: {err}")
@@ -575,7 +602,7 @@ class VentanaGestion:
             self.combo_grupos.set("")
             return
         semestre_id = self.materias_map.get(materia_id)
-        if semestre_id:
+        if semestre_id is not None:
             texto_sem = self.semestres_map.get(str(semestre_id))
             self.combo_semestre.set(texto_sem if texto_sem else "Desconocido")
             self.cargar_grupos_por_semestre(semestre_id, materia_id)

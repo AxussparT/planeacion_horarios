@@ -54,7 +54,9 @@ class GeneradorHorarios:
         
         sql_asignaciones = f"""
             SELECT a.asignacion_id, a.profesor_id, a.materia_id, a.grupo_id, 
+                   p.nombre as profesor_nombre,
                    p.disponible_inicio, p.disponible_fin, p.dias_disponibles,
+                   m.nombre as materia_nombre,
                    IFNULL(m.horas_semana, 4) as horas_semana,
                    IFNULL(m.tipo, 'Normal') as tipo_materia,
                    IFNULL(m.semestre_id, 99) as semestre_id,
@@ -454,7 +456,9 @@ class GeneradorHorarios:
                 prof_id = asignacion.get('profesor_id', '?')
                 grupo_id = asignacion.get('grupo_id', '?')
                 mat_id = asignacion.get('materia_id', '?')
-                tipo_mat = asignacion.get('tipo_materia', 'Normal')
+                prof_nombre = asignacion.get('profesor_nombre', prof_id)
+                mat_nombre = asignacion.get('materia_nombre', mat_id)
+                tipo_mat = asignacion.get('tipo_materia', 'Normal').lower()
                 es_en_linea = str(asignacion.get('en_linea', 'NO')).upper() == 'SI'
                 sugerencias = []
                 causas = []
@@ -466,9 +470,28 @@ class GeneradorHorarios:
                     dispon_slots = (s_fin - s_inicio) * num_dias
                     hrs_profesor = dispon_slots / 2
                     
+                    # --- NUEVO CÁLCULO DE SOBRECARGA ---
+                    horas_ya_asignadas = 0
+                    for (d, p, s) in self.ocupacion_profesores.keys():
+                        if p == prof_id:
+                            horas_ya_asignadas += 0.5  # Cada slot vale media hora
+                            
+                    horas_restantes = hrs_profesor - horas_ya_asignadas
+                    
                     if horas_totales > hrs_profesor:
-                        causas.append(f"El profesor solo tiene {hrs_profesor:.0f}h disponibles/semana, pero la materia exige {horas_totales}h.")
-                        sugerencias.append(f"Reducir horas de la materia ({mat_id}) a máximo {int(hrs_profesor)}h, o ampliar el horario del profesor ({prof_id}).")
+                        causas.append(
+                            f"El profesor '{prof_nombre}' solo tiene {hrs_profesor:.0f}h "
+                            f"disponibles/semana por contrato, pero la materia exige {horas_totales}h.")
+                        sugerencias.append(
+                            f"Reducir horas de la materia '{mat_nombre}' ({mat_id}) a máximo "
+                            f"{int(hrs_profesor)}h, o ampliar el horario de '{prof_nombre}'.")
+                            
+                    elif horas_totales > horas_restantes:
+                        causas.append(
+                            f"Sobrecarga: El profesor '{prof_nombre}' ya tiene {horas_ya_asignadas:.1f}h ocupadas en otros grupos. "
+                            f"Solo le quedan {horas_restantes:.1f}h libres, pero la materia pide {horas_totales}h.")
+                        sugerencias.append(
+                            f"Asignar la materia a otro profesor o liberarle horas a '{prof_nombre}'.")
                     
                     if not es_en_linea and self.salones:
                         salones_compatibles = [s for s in self.salones
@@ -477,44 +500,57 @@ class GeneradorHorarios:
                                               or tipo_mat == 'normal'
                                               and self.tipos_salones.get(s, 'Normal').lower() == 'normal']
                         if not salones_compatibles:
-                            causas.append(f"No hay salones de tipo '{tipo_mat}' disponibles.")
+                            causas.append(f"No hay salones de tipo '{tipo_mat}' disponibles para la materia '{mat_nombre}'.")
                             if tipo_mat in ['tecnológica', 'tecnologica', 'laboratorio']:
-                                sugerencias.append(f"Registrar un salón de tipo '{tipo_mat}' o cambiar el tipo de la materia a 'Normal'.")
+                                sugerencias.append(
+                                    f"Registrar un salón de tipo '{tipo_mat}' o cambiar "
+                                    f"el tipo de la materia '{mat_nombre}' a 'Normal'.")
                             else:
-                                sugerencias.append("Registrar más salones de tipo 'Normal'.")
+                                sugerencias.append("Registrar más salones de tipo 'Normal'. "
+                                                   f"Actualmente hay {len(self.salones)} salón(es) registrado(s).")
                     
                     if num_dias == 1 and horas_totales > 4:
-                        causas.append(f"El profesor solo tiene 1 día disponible, pero la materia necesita {horas_totales}h en bloque.")
-                        sugerencias.append(f"Distribuir la materia en mínimo {int(horas_totales/4 + 1)} días, o agregar más días a la disponibilidad del profesor ({prof_id}).")
+                        causas.append(
+                            f"El profesor '{prof_nombre}' solo tiene 1 día disponible, "
+                            f"pero la materia necesita {horas_totales}h en bloque.")
+                        sugerencias.append(
+                            f"Distribuir la materia en mínimo {int(horas_totales/4 + 1)} días, "
+                            f"o agregar más días de disponibilidad al profesor '{prof_nombre}' ({prof_id}).")
                     
                     for dia in self.dias_disponibles_lista(asignacion):
                         slots_usados_prof = sum(1 for (d, p, s) in self.ocupacion_profesores
                                                if d == dia and p == prof_id)
                         if slots_usados_prof >= (s_fin - s_inicio):
-                            causas.append(f"El profesor ya está completamente ocupado el día {dia}.")
-                            sugerencias.append(f"Agregar más días de disponibilidad al profesor ({prof_id}).")
+                            causas.append(f"El profesor '{prof_nombre}' ya está completamente ocupado el día {dia}.")
+                            sugerencias.append(
+                                f"Agregar más días de disponibilidad al profesor '{prof_nombre}' ({prof_id}).")
                 
                 except Exception:
                     pass
                 
                 if not causas:
                     if es_en_linea:
-                        causas.append("No se encontró espacio en línea disponible (slots 18-28) sin conflictos con clases presenciales.")
+                        causas.append(
+                            "No se encontró espacio en línea disponible (slots 18-28) "
+                            "sin conflictos con clases presenciales.")
                         sugerencias.append("Ampliar el horario del profesor o reducir horas de la materia.")
                     else:
-                        causas.append("No hay salones disponibles en los horarios compatibles con el profesor y el grupo.")
-                        sugerencias.append("Revisar disponibilidad del profesor, o agregar más salones.")
-                
-                razon = " | ".join(causas)
-                sug_texto = "\n-> Sugerencias: " + " | ".join(sugerencias[:3])
+                        causas.append(
+                            "No hay salones disponibles en los horarios compatibles "
+                            f"con el profesor '{prof_nombre}' y el grupo '{grupo_id}'.")
+                        sugerencias.append(
+                            f"Revisar disponibilidad del profesor '{prof_nombre}', "
+                            "o agregar más salones.")
                 
                 alerta = (
-                    f"ID:{asignacion['asignacion_id']} | Prof: {prof_id} | "
-                    f"Materia: {mat_id} ({horas_totales}h, {tipo_mat}) | Grupo: {grupo_id}\n"
-                    f"-> {razon}{sug_texto}"
+                    f"Materia: {mat_nombre.upper()} (Grupo {grupo_id})\n"
+                    f"Profesor: {prof_nombre.upper()}\n"
+                    f"Detalle: {'; '.join(causas)}\n"
+                    f"Sugerencias: {' | '.join(sugerencias[:3])}"
                 )
                 alertas_generadas.append(alerta)
-                print(f"ALERTA: No se pudo asignar ID {asignacion['asignacion_id']} ({horas_totales}h) - {razon}")
+                causa_corta = causas[0] if causas else "sin causa identificada"
+                print(f"ALERTA: No se pudo asignar {mat_nombre} ({grupo_id}) - {causa_corta}")
 
         self.guardar_en_bd(horarios_generados, modo)
         
