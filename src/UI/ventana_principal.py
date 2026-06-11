@@ -410,7 +410,9 @@ class VentanaPrincipal:
                 for f in filas:
                     clave = (str(f['hora_inicio']), str(f['hora_fin']))
                     if clave not in periodos_agrupados:
-                        periodos_agrupados[clave] = {'hora_inicio': str(f['hora_inicio'])[:5], 'hora_fin': str(f['hora_fin'])[:5], 'dias': []}
+                        h_i = ':'.join(str(f['hora_inicio']).split(':')[:2])
+                        h_f = ':'.join(str(f['hora_fin']).split(':')[:2])
+                        periodos_agrupados[clave] = {'hora_inicio': h_i, 'hora_fin': h_f, 'dias': []}
                     periodos_agrupados[clave]['dias'].append(f['dia'])
                 self.cargar_periodos_en_ui(list(periodos_agrupados.values()))
             except Exception:

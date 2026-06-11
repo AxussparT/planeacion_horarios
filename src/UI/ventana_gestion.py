@@ -1078,7 +1078,7 @@ class VentanaGestion:
                     lineas_originales = str(materia).split('\n')
                     lineas_ajustadas = []
                     for linea in lineas_originales:
-                        lineas_ajustadas.append(textwrap.fill(linea, width=16))
+                        lineas_ajustadas.append(textwrap.fill(linea, width=20))
                         
                     texto_final = '\n'.join(lineas_ajustadas)
                     

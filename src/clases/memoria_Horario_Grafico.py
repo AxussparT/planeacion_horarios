@@ -1,5 +1,4 @@
 import numpy as np
-import textwrap
 import mysql.connector
 from src.conexion import get_conexion
 
@@ -66,16 +65,12 @@ class MemoriaHorarioGrafico:
                 if idx_entidad is None:
                     continue
 
-                mat_corta = textwrap.shorten(reg['materia'], width=22, placeholder="...")
-                prof_partes = reg['profesor_nombre'].split()
-                prof_limpio = " ".join(prof_partes[-3:]) if len(prof_partes) > 3 else reg['profesor_nombre']
-
                 if modo == "Salón":
-                    texto_celda = f"{mat_corta}\n{prof_limpio}\n{reg['grupo_id']}"
+                    texto_celda = f"{reg['materia']}\n{reg['profesor_nombre']}\n{reg['grupo_id']}"
                 elif modo == "Profesor":
-                    texto_celda = f"{mat_corta}\nSalón: {reg['salon_id']}\nGrupo: {reg['grupo_id']}"
+                    texto_celda = f"{reg['materia']}\nSalón: {reg['salon_id']}\nGrupo: {reg['grupo_id']}"
                 elif modo == "Grupo":
-                    texto_celda = f"{mat_corta}\n{prof_limpio}\nSalón: {reg['salon_id']}"
+                    texto_celda = f"{reg['materia']}\n{reg['profesor_nombre']}\nSalón: {reg['salon_id']}"
 
                 verdadero_horario.append([texto_celda, idx_entidad, dia_col, idx_i, idx_f])
 
