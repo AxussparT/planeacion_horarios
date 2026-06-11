@@ -175,24 +175,40 @@ class VentanaPrincipal:
         self.notebook.add(self.tab_gestion, text='Gestión')
         self._gestion_control = VentanaGestion(parent_frame=self.tab_gestion)
 
-        # --- SECCIÓN DERECHA: TABLAS ---
-        self.frame_derecho = ttk.Frame(self.tab_personal, style='blue.TFrame')
-        self.frame_derecho.grid(row=0, column=1, sticky="nsew", padx=20, pady=10)
+       # --- SECCIÓN DERECHA: TABLAS (AHORA CON SCROLLBAR) ---
+        self.canvas_der = tk.Canvas(self.tab_personal, highlightthickness=0, background='#0A0F1E')
+        self.scrollbar_der = ttk.Scrollbar(self.tab_personal, orient="vertical", command=self.canvas_der.yview)
+        self.frame_derecho = ttk.Frame(self.canvas_der, style='blue.TFrame')
+        
+        self.frame_derecho.bind(
+            "<Configure>", lambda e: self.canvas_der.configure(scrollregion=self.canvas_der.bbox("all"))
+        )
+        self.canvas_window_der = self.canvas_der.create_window((0, 0), window=self.frame_derecho, anchor="nw")
+        
+        def ajustar_ancho_der(event):
+            self.canvas_der.itemconfig(self.canvas_window_der, width=event.width)
+        self.canvas_der.bind("<Configure>", ajustar_ancho_der)
+
+        self.canvas_der.configure(yscrollcommand=self.scrollbar_der.set)
+        
+        # Ubicamos el canvas y el scrollbar en la cuadrícula de tab_personal
+        self.canvas_der.grid(row=0, column=1, sticky="nsew", padx=(20, 0), pady=10)
+        self.scrollbar_der.grid(row=0, column=2, sticky="nse", pady=10)
 
         # Tabla Profesores
         self.sv_busqueda = tk.StringVar(); self.sv_busqueda.trace_add("write", lambda *a: self.filtrar_profesores())
         self.crear_seccion_tabla("Profesores Registrados", "sv_busqueda", "tabla_profesores", ('Cuenta', 'Profesor', 'Dias', 'Horario', 'En línea'))
         self.tabla_profesores.bind("<<TreeviewSelect>>", self.cargar_profesor_seleccionado)
 
-        # Tabla Materias
+        # Tabla Materias (CON FILTRO DE SEMESTRE)
         self.sv_busqueda_mat = tk.StringVar(); self.sv_busqueda_mat.trace_add("write", lambda *a: self.filtrar_materias())
-        self.crear_seccion_tabla("Materias Registradas", "sv_busqueda_mat", "tabla_materias", ('Clave', 'Nombre', 'Hrs/Sem', 'Semestre','preferencia salon'))
+        self.sv_filtro_semestre = tk.StringVar(value="Todos"); self.sv_filtro_semestre.trace_add("write", lambda *a: self.filtrar_materias())
+        self.crear_seccion_tabla("Materias Registradas", "sv_busqueda_mat", "tabla_materias", ('Clave', 'Nombre', 'Hrs/Sem', 'Semestre','preferencia salon'), combo_semestre_var="sv_filtro_semestre")
         self.tabla_materias.bind("<<TreeviewSelect>>", self.cargar_materia_seleccionada)
 
         # Tabla Salones
-# Tabla Salones
         self.crear_seccion_tabla("Salones Registrados", None, "tabla_salones", ('Aula', 'Capacidad', 'Tipo'))
-        self.tabla_salones.bind("<<TreeviewSelect>>", self.cargar_salon_seleccionado) # <--- LÍNEA NUEVA
+        self.tabla_salones.bind("<<TreeviewSelect>>", self.cargar_salon_seleccionado)
 
     # --- MÉTODOS UI ---
     def cargar_materia_seleccionada(self, event):
@@ -220,18 +236,23 @@ class VentanaPrincipal:
         e = ttk.Entry(self.frame_izquierdo_principal, width=30, font=self._fuente_label)
         e.pack(pady=5, fill='x', padx=10); setattr(self, attr, e)
 
-    def crear_seccion_tabla(self, titulo, var_busq, attr_tabla, cols):
-        lbl = ttk.Label(self.frame_derecho, text=titulo, style='fondo.TLabel')
-        lbl.configure(font=self._fuente_titulo)
-        lbl.pack(pady=(15, 5))
+    def crear_seccion_tabla(self, titulo, var_busq, attr_tabla, cols, combo_semestre_var=None):
+        ttk.Label(self.frame_derecho, text=titulo, font=self._fuente_sub, style='fondo.TLabel').pack(pady=(15, 5))
         if var_busq:
             f = ttk.Frame(self.frame_derecho, style='blue.TFrame'); f.pack(fill='x')
-            ttk.Label(f, text="Buscar:", style='fondo.TLabel').pack(side='left', padx=5)
-            ttk.Entry(f, textvariable=getattr(self, var_busq), width=25, font=self._fuente_label).pack(side='left', padx=5, fill='x', expand=True)
+            ttk.Label(f, text="Buscar:", font=self._fuente_label, style='fondo.TLabel').pack(side='left', padx=5)
+            ttk.Entry(f, textvariable=getattr(self, var_busq), width=35, font=self._fuente_label).pack(side='left', padx=5)
+            
+            # --- NUEVO: Filtro de Semestre ---
+            if combo_semestre_var:
+                ttk.Label(f, text="Semestre:", font=self._fuente_label, style='fondo.TLabel').pack(side='left', padx=(15, 5))
+                combo = ttk.Combobox(f, textvariable=getattr(self, combo_semestre_var), width=8, state='readonly', font=self._fuente_label)
+                combo['values'] = ("Todos", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+                combo.pack(side='left', padx=5)
         
         frame_t = ttk.Frame(self.frame_derecho); frame_t.pack(fill='both', expand=True, pady=5)
-        t = ttk.Treeview(frame_t, columns=cols, show='headings', height=8)
-        for c in cols: t.heading(c, text=c); t.column(c, width=100, anchor='center', minwidth=60)
+        t = ttk.Treeview(frame_t, columns=cols, show='headings', height=6)
+        for c in cols: t.heading(c, text=c); t.column(c, width=110, anchor='center')
         t.pack(side='left', fill='both', expand=True)
         sb = ttk.Scrollbar(frame_t, orient="vertical", command=t.yview); t.configure(yscroll=sb.set); sb.pack(side='right', fill='y')
         setattr(self, attr_tabla, t)
@@ -427,7 +448,16 @@ class VentanaPrincipal:
 
     def filtrar_materias(self):
         t = self.sv_busqueda_mat.get().lower()
-        f = [m for m in self.cache_materias if t in str(m[0]).lower() or t in m[1].lower()]
+        s = self.sv_filtro_semestre.get()
+        
+        f = []
+        for m in self.cache_materias:
+            coincide_texto = (t in str(m[0]).lower() or t in m[1].lower())
+            coincide_sem = (s == "Todos" or str(m[3]) == s)
+            
+            if coincide_texto and coincide_sem:
+                f.append(m)
+                
         self.refrescar_tabla_mat(f)
 
     # --- LÓGICA SALONES (RESTAURADA) ---
