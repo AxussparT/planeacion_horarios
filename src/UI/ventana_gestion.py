@@ -182,85 +182,79 @@ class VentanaGestion:
         frame_contenedor.pack(fill='x', pady=10)
 
         self.frame_izq = ttk.Frame(frame_contenedor, style='blue.TFrame')
-        self.frame_izq.pack(side='left', padx=10, anchor='n')
-        
-        ttk.Label(self.frame_izq, text="Gestión", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=3)
-        ttk.Label(self.frame_izq, text="Seleccione el periodo", background='#0A0F1E', foreground='white', font=self._fuente_label).pack()
-        
-        self.combo_periodos = ttk.Combobox(self.frame_izq, width=30, font=self._fuente_label, state='readonly')
+        self.frame_izq.pack(side='left', padx=(10, 20), anchor='n')
+
+        # --- Periodo ---
+        ttk.Label(self.frame_izq, text="Periodo", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=(3, 2))
+        self.combo_periodos = ttk.Combobox(self.frame_izq, width=32, font=self._fuente_label, state='readonly')
         self.combo_periodos['values'] = ("A (Septiembre-Octubre)", "B (Febrero - Junio)")
         self.combo_periodos.pack(pady=2, padx=10)
         self.combo_periodos.bind("<<ComboboxSelected>>", self.filtrar_materias_por_periodo)
 
-        self.frame_der = ttk.Frame(frame_contenedor, style='blue.TFrame')
-        self.frame_der.pack(side='left', padx=10, anchor='n', fill='both', expand=True)
-        ttk.Label(self.frame_der, text="Vista Previa", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=3)
-
-        f_filtro_estado = ttk.Frame(self.frame_der, style='blue.TFrame')
-        f_filtro_estado.pack(fill='x', pady=2)
-        ttk.Label(f_filtro_estado, text="Filtrar por Estado:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=5)
-        self.combo_estado_filtro = ttk.Combobox(f_filtro_estado, values=["Todos", "pendiente", "asignado"], state="readonly", width=15, font=self._fuente_label)
-        self.combo_estado_filtro.set("Todos")
-        self.combo_estado_filtro.pack(side='left')
-        self.combo_estado_filtro.bind("<<ComboboxSelected>>", lambda e: self.actualizar_vista_previa())
-
-        frame_contenedor2 = ttk.Frame(self.frame_izq, style='blue.TFrame')
-        frame_contenedor2.pack(fill='x', pady=10)
-
-        self.frame_izq_pf = ttk.Frame(frame_contenedor2, style='blue.TFrame')
-        self.frame_izq_pf.pack(side='left', padx=10, anchor='n')
-        ttk.Label(self.frame_izq_pf, text="Profesor", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=3)
-        
-        self.combo_profesores = ttk.Combobox(self.frame_izq_pf, width=30, font=self._fuente_label, state='readonly')
-        self.combo_profesores.pack(pady=3)
+        # --- Profesor ---
+        ttk.Separator(self.frame_izq, orient='horizontal').pack(fill='x', pady=6)
+        ttk.Label(self.frame_izq, text="Profesor", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=(3, 2))
+        self.combo_profesores = ttk.Combobox(self.frame_izq, width=32, font=self._fuente_label, state='readonly')
+        self.combo_profesores.pack(pady=2, padx=10)
         self.combo_profesores.bind("<<ComboboxSelected>>", lambda e: self.actualizar_vista_previa())
-        
-        ttk.Button(self.frame_izq_pf, text="Asignar Manualmente", command=self.asignar_profesor_materia).pack(pady=2)
+        ttk.Button(self.frame_izq, text="Asignar Manualmente", command=self.asignar_profesor_materia).pack(pady=(4, 2), padx=10, fill='x')
 
-        self.frame_der_pf = ttk.Frame(frame_contenedor2, style='blue.TFrame')
-        self.frame_der_pf.pack(side='left', padx=10, anchor='n')
-        ttk.Label(self.frame_der_pf, text="Materia", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=3)
-        
-        self.combo_materias = ttk.Combobox(self.frame_der_pf, width=30, font=self._fuente_label, state='readonly')
-        self.combo_materias.pack(pady=3)
+        # --- Materia ---
+        ttk.Separator(self.frame_izq, orient='horizontal').pack(fill='x', pady=6)
+        ttk.Label(self.frame_izq, text="Materia", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=(3, 2))
+        self.combo_materias = ttk.Combobox(self.frame_izq, width=32, font=self._fuente_label, state='readonly')
+        self.combo_materias.pack(pady=2, padx=10)
         self.combo_materias.bind("<<ComboboxSelected>>", lambda e: (self.mostrar_semestre_de_materia(e), self.actualizar_vista_previa()))
 
-        frame_contenedor3 = ttk.Frame(self.frame_izq, style='blue.TFrame')
-        frame_contenedor3.pack(fill='x', pady=10)
+        # --- Grupo y Semestre lado a lado ---
+        ttk.Separator(self.frame_izq, orient='horizontal').pack(fill='x', pady=6)
+        f_gs = ttk.Frame(self.frame_izq, style='blue.TFrame')
+        f_gs.pack(fill='x', padx=10, pady=4)
 
-        self.frame_izq_gp = ttk.Frame(frame_contenedor3, style='blue.TFrame')
-        self.frame_izq_gp.pack(side='left', padx=10, anchor='n')
-        ttk.Label(self.frame_izq_gp, text="Grupo", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=3)
-        
-        self.combo_grupos = ttk.Combobox(self.frame_izq_gp, width=20, font=self._fuente_label, state='normal')
-        self.combo_grupos.pack(pady=3)
-        
-        boton_asignar = ttk.Button(self.frame_izq_gp, text="Empezar asignación automática", command=self.iniciar_asignacion_automatica) 
-        boton_asignar.pack(pady=2)
-        
-        boton_formatear_asignaciones=ttk.Button(self.frame_izq_gp,text="Borrar asignaciones almacenadas", command=self.formatear_asignaciones)
-        boton_formatear_asignaciones.pack(pady=2)
-        
-        boton_borrar_asignacion=ttk.Button(self.frame_izq_gp,text="Borrar asignacion", command=self.borrar_asignacion_seleccionada)
-        boton_borrar_asignacion.pack(pady=2)
+        f_grupo = ttk.Frame(f_gs, style='blue.TFrame')
+        f_grupo.pack(side='left', fill='x', expand=True)
+        ttk.Label(f_grupo, text="Grupo", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=(0, 2))
+        self.combo_grupos = ttk.Combobox(f_grupo, width=12, font=self._fuente_label, state='normal')
+        self.combo_grupos.pack(pady=2, fill='x', padx=(0, 5))
 
-        self.frame_der_gp = ttk.Frame(frame_contenedor3, style='blue.TFrame')
-        self.frame_der_gp.pack(side='left', padx=10, anchor='n')
-        ttk.Label(self.frame_der_gp, text="Semestre", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=3)
-        
-        self.combo_semestre = ttk.Combobox(self.frame_der_gp, width=30, font=self._fuente_sub, state='readonly')
-        self.combo_semestre.pack(pady=3)
+        f_semestre = ttk.Frame(f_gs, style='blue.TFrame')
+        f_semestre.pack(side='left', fill='x', expand=True)
+        ttk.Label(f_semestre, text="Semestre", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=(0, 2))
+        self.combo_semestre = ttk.Combobox(f_semestre, width=14, font=self._fuente_label, state='readonly')
+        self.combo_semestre.pack(pady=2, fill='x')
         self.combo_semestre.bind("<<ComboboxSelected>>", self.filtrar_materias_semestre_seleccionado)
 
+        # --- Acciones ---
+        ttk.Separator(self.frame_izq, orient='horizontal').pack(fill='x', pady=6)
+        f_acciones = ttk.Frame(self.frame_izq, style='blue.TFrame')
+        f_acciones.pack(fill='x', padx=10, pady=8)
+        ttk.Button(f_acciones, text="Asignación Automática", command=self.iniciar_asignacion_automatica).pack(fill='x', pady=2)
+        ttk.Button(f_acciones, text="Liberar Asignación", command=self.borrar_asignacion_seleccionada).pack(fill='x', pady=2)
+        ttk.Button(f_acciones, text="Borrar Todas", command=self.formatear_asignaciones).pack(fill='x', pady=2)
+
+        # ===== Lado derecho: Vista Previa =====
+        self.frame_der = ttk.Frame(frame_contenedor, style='blue.TFrame')
+        self.frame_der.pack(side='left', padx=(5, 10), anchor='n', fill='both', expand=True)
+
+        f_filtro_estado = ttk.Frame(self.frame_der, style='blue.TFrame')
+        f_filtro_estado.pack(fill='x', pady=(5, 2))
+        ttk.Label(f_filtro_estado, text="Filtrar por Estado:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=5)
+        self.combo_estado_filtro = ttk.Combobox(f_filtro_estado, values=["Todos", "pendiente", "asignado"], state="readonly", width=12, font=self._fuente_label)
+        self.combo_estado_filtro.set("Todos")
+        self.combo_estado_filtro.pack(side='left', padx=5)
+        self.combo_estado_filtro.bind("<<ComboboxSelected>>", lambda e: self.actualizar_vista_previa())
+
+        ttk.Button(f_filtro_estado, text="Ver Todas / Limpiar", command=self.limpiar_filtros).pack(side='right', padx=5)
+
         self.frame_tablas = ttk.Frame(self.frame_der, style='blue.TFrame')
-        self.frame_tablas.pack(padx=10, anchor='n', fill='both', expand=True)
+        self.frame_tablas.pack(fill='both', expand=True, pady=5)
 
         columnas = ('Profesor', 'materia', 'Estado')
         self.tabla_profesores = ttk.Treeview(self.frame_tablas, columns=columnas, show='headings', height=20)
         self.tabla_profesores.column('Profesor', anchor='w', width=180)
         self.tabla_profesores.column('materia', anchor='w', width=200)
         self.tabla_profesores.column('Estado', anchor='center', width=80)
-        
+
         self.tabla_profesores.heading('Profesor', text='Profesor')
         self.tabla_profesores.heading('materia', text='Materia (Grupo)')
         self.tabla_profesores.heading('Estado', text='Estado')
@@ -276,9 +270,6 @@ class VentanaGestion:
         sb_h.pack(side='bottom', fill='x')
 
         self.tabla_profesores.pack(fill='both', expand=True)
-        
-        boton_limpiar = ttk.Button(self.frame_der, text="Ver Todas las Asignaciones / Limpiar Selección", command=self.limpiar_filtros)
-        boton_limpiar.pack(pady=10, side='bottom', fill='x', padx=20)
 
     # --- UTILIDADES ---
     def _obtener_id_valido(self, texto_combo, es_grupo=False):
