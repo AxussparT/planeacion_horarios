@@ -246,6 +246,14 @@ class VentanaGestion:
 
         ttk.Button(f_filtro_estado, text="Ver Todas / Limpiar", command=self.limpiar_filtros).pack(side='right', padx=5)
 
+        f_busqueda = ttk.Frame(self.frame_der, style='blue.TFrame')
+        f_busqueda.pack(fill='x', pady=(2, 2))
+        ttk.Label(f_busqueda, text="Buscar:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=5)
+        self.sv_busqueda_asignaciones = tk.StringVar()
+        self.sv_busqueda_asignaciones.trace_add("write", lambda *a: self.actualizar_vista_previa())
+        entry_busqueda = ttk.Entry(f_busqueda, textvariable=self.sv_busqueda_asignaciones, font=self._fuente_label)
+        entry_busqueda.pack(side='left', fill='x', expand=True, padx=(0, 5))
+
         self.frame_tablas = ttk.Frame(self.frame_der, style='blue.TFrame')
         self.frame_tablas.pack(fill='both', expand=True, pady=5)
 
@@ -556,7 +564,9 @@ class VentanaGestion:
                 messagebox.showerror("Error BD", f"Error cargando combos: {err}")
 
     def limpiar_filtros(self):
-        self.asignacion_seleccionada_id = None 
+        self.asignacion_seleccionada_id = None
+        if hasattr(self, 'sv_busqueda_asignaciones'):
+            self.sv_busqueda_asignaciones.set("")
         self.actualizar_vista_previa(mostrar_todo=True)
 
     def filtrar_materias_por_periodo(self, event=None):
@@ -675,11 +685,15 @@ class VentanaGestion:
             mat_id = None
             grup_id = None
             estado_filtro = "Todos"
+            texto_busqueda = ""
+            if hasattr(self, 'sv_busqueda_asignaciones'):
+                self.sv_busqueda_asignaciones.set("")
         else:
             prof_id = self._obtener_id_valido(self.combo_profesores.get()) if hasattr(self, 'combo_profesores') else None
             mat_id = self._obtener_id_valido(self.combo_materias.get()) if hasattr(self, 'combo_materias') else None
             grup_id = self._obtener_id_valido(self.combo_grupos.get(), es_grupo=True) if hasattr(self, 'combo_grupos') else None
             estado_filtro = self.combo_estado_filtro.get() if hasattr(self, 'combo_estado_filtro') else "Todos"
+            texto_busqueda = self.sv_busqueda_asignaciones.get().strip() if hasattr(self, 'sv_busqueda_asignaciones') else ""
 
         if hasattr(self, 'tabla_profesores'):
             for item in self.tabla_profesores.get_children():
@@ -705,19 +719,25 @@ class VentanaGestion:
                 """
                 params = []
                 
-                if prof_id and not self.asignacion_seleccionada_id:
-                    sql += " AND a.profesor_id = %s"
-                    params.append(prof_id)
-                if mat_id and not self.asignacion_seleccionada_id:
-                    sql += " AND a.materia_id = %s"
-                    params.append(mat_id)
-                if grup_id and not self.asignacion_seleccionada_id:
-                    sql += " AND a.grupo_id = %s"
-                    params.append(grup_id)
-                    
+                if not texto_busqueda:
+                    if prof_id and not self.asignacion_seleccionada_id:
+                        sql += " AND a.profesor_id = %s"
+                        params.append(prof_id)
+                    if mat_id and not self.asignacion_seleccionada_id:
+                        sql += " AND a.materia_id = %s"
+                        params.append(mat_id)
+                    if grup_id and not self.asignacion_seleccionada_id:
+                        sql += " AND a.grupo_id = %s"
+                        params.append(grup_id)
+
                 if estado_filtro != "Todos":
                     sql += " AND a.estado = %s"
                     params.append(estado_filtro)
+
+                if texto_busqueda:
+                    sql += " AND (p.nombre LIKE %s OR m.nombre LIKE %s OR a.profesor_id LIKE %s OR a.materia_id LIKE %s)"
+                    like = f"%{texto_busqueda}%"
+                    params.extend([like, like, like, like])
 
                 sql += " LIMIT 50"
                 cur.execute(sql, params)
