@@ -129,10 +129,6 @@ class GeneradorHorarios:
         grupo_id = asignacion['grupo_id']
         es_en_linea = str(asignacion.get('en_linea', 'NO')).upper() in ['SI', 'SÍ']
 
-        if es_en_linea:
-            if slot_inicio < 18 or (slot_inicio + duracion_bloques) > 28:
-                return False
-
         if slot_inicio + duracion_bloques > self.SLOTS_DIARIOS:
             return False
 
@@ -577,7 +573,7 @@ class GeneradorHorarios:
                 if not causas:
                     if es_en_linea:
                         causas.append(
-                            "No se encontró espacio en línea disponible (slots 18-28) "
+                            "No se encontró espacio en línea disponible "
                             "sin conflictos con clases presenciales.")
                         sugerencias.append("Ampliar el horario del profesor o reducir horas de la materia.")
                     else:
