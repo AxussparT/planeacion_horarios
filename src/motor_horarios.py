@@ -513,6 +513,22 @@ class GeneradorHorarios:
 
                 try:
                     hrs_profesor, num_dias, periodos = self._calcular_horas_disponibles(asignacion)
+                    # --- DIAGNÓSTICO EN CONSOLA ---
+                    print(f"\n[DEBUG] Falló asignación: {mat_nombre} ({grupo_id}) -> profesor {prof_id} ({prof_nombre})")
+                    print(f"[DEBUG]   horas_totales={horas_totales}, hrs_profesor(según BD)={hrs_profesor}, num_dias={num_dias}")
+                    print(f"[DEBUG]   periodos disponibles en BD para {prof_id}:")
+                    for p in periodos:
+                        print(f"          - {p['dia']}: slot {p['slot_inicio']}-{p['slot_fin']}")
+                    ocupadas = []
+                    for (d, p, s) in sorted(self.ocupacion_profesores.keys()):
+                        if p == prof_id:
+                            ocupadas.append(f"{d} slot {s}")
+                    if ocupadas:
+                        print(f"[DEBUG]   slots ocupados para {prof_id}: {ocupadas}")
+                    else:
+                        print(f"[DEBUG]   slots ocupados para {prof_id}: (ninguno)")
+                    # --- FIN DIAGNÓSTICO ---
+
                     if num_dias > 0 and hrs_profesor > 0:
                         horas_ya_asignadas = 0
                         for (d, p, s) in self.ocupacion_profesores.keys():
