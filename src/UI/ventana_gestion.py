@@ -106,7 +106,7 @@ class VentanaGestion:
         return {
             "1": ["S1A", "S1B", "S1C", "S1D", "S1E", "S1F"],
             "2": ["S2A", "S2B", "S2C", "S2D", "S2E", "S2F"],
-            "3": ["S3A", "S3B", "S3C", "S3D", "S3E"],
+            "3": ["S3", "S4", "SE", "SF", "SU","SV"],
             "4": ["S4A", "S4B", "S4C", "S4D", "S4E"],
             "5": ["S5A", "S5B", "S5C", "S5D", "S5E"],
             "6": ["S6A", "S6B", "S6C", "S6D"],
