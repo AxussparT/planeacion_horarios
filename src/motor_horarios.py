@@ -326,6 +326,7 @@ class GeneradorHorarios:
 
         horarios_generados = []
         alertas_generadas = []
+        _batch_map = {}
 
         self.asignaciones.sort(
             key=lambda x: (
@@ -375,6 +376,7 @@ class GeneradorHorarios:
                 estrategias = [[("Lunes", bloques_totales)], [("Martes", bloques_totales)], [("Miércoles", bloques_totales)], [("Jueves", bloques_totales)], [("Viernes", bloques_totales)], [("Sábado", bloques_totales)]]
 
             asignado_completamente = False
+            gen_prev = len(horarios_generados)
 
             if es_en_linea:
                 salones_priorizados = sorted([s for s in self.salones if s.upper().startswith("EN_LINEA")])
@@ -503,6 +505,43 @@ class GeneradorHorarios:
                             else:
                                 for ht in horarios_temporales:
                                     self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
+
+            if asignado_completamente:
+                key = (asignacion['profesor_id'], asignacion['materia_id'])
+                for h in horarios_generados[gen_prev:]:
+                    _batch_map.setdefault(key, []).append(h)
+
+            if not asignado_completamente and not es_en_linea and tipo_materia != 'auditorio':
+                key = (asignacion['profesor_id'], asignacion['materia_id'])
+                if key in _batch_map:
+                    for ref in list(_batch_map[key]):
+                        salon_id = ref['salon_id']
+                        dia = ref['dia']
+                        h_ini_ref = self._hora_a_slot(datetime.datetime.strptime(ref['hora_inicio'], "%H:%M:%S").time())
+                        h_fin_ref = self._hora_a_slot(datetime.datetime.strptime(ref['hora_fin'], "%H:%M:%S").time())
+                        h_dup_ref = h_fin_ref - h_ini_ref
+
+                        for slot_propuesto, lado in [(h_ini_ref - bloques_totales, "ANTES"), (h_fin_ref, "DESPUÉS")]:
+                            if lado == "ANTES" and slot_propuesto < 0:
+                                continue
+                            if lado == "DESPUÉS" and slot_propuesto + bloques_totales > self.SLOTS_DIARIOS:
+                                continue
+                            if self.es_posible_asignar(asignacion, dia, slot_propuesto, bloques_totales, salon_id):
+                                self.registrar_ocupacion(asignacion, dia, slot_propuesto, bloques_totales, salon_id)
+                                horario = {
+                                    "asignacion_id": asignacion['asignacion_id'],
+                                    "salon_id": salon_id,
+                                    "dia": dia,
+                                    "hora_inicio": self._slot_a_hora(slot_propuesto),
+                                    "hora_fin": self._slot_a_hora(slot_propuesto + bloques_totales)
+                                }
+                                horarios_generados.append(horario)
+                                _batch_map[key].append(horario)
+                                asignado_completamente = True
+                                print(f"[BATCH] {asignacion.get('materia_nombre','?')} ({asignacion['grupo_id']}) colocado {lado} de {ref['hora_inicio']}-{ref['hora_fin']} en {salon_id}")
+                                break
+                        if asignado_completamente:
+                            break
 
             if not asignado_completamente:
                 prof_id = asignacion.get('profesor_id', '?')

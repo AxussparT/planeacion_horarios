@@ -632,7 +632,30 @@ completo en el panel de texto inferior. Además, el messagebox ya no
 trunca las alertas a 5 — solo muestra un resumen y redirige a la
 pestaña Alertas.
 
-### 11.7 Toggle de regla de separación 2.5h para clases en línea (2026-06-17)
+### 11.7 Optimización de lotes: misma materia en salón consecutivo (2026-06-17)
+
+**Archivo:** `src/motor_horarios.py`
+
+Cuando un profesor imparte la **misma materia** a **múltiples grupos**,
+el motor ahora detecta esta situación y reutiliza el mismo salón para
+colocar los grupos **consecutivamente** (uno detrás de otro).
+
+**Antes:** Cada grupo ocupaba un salón diferente en el mismo horario.
+Si un profesor tenía 4 grupos, necesitaba 4 salones a la vez, y el 4º
+fallaba por "no hay salones disponibles".
+
+**Ahora:** El motor asigna el 1er grupo en un salón (ej. 07:00-09:00),
+luego coloca el 2º grupo en el **mismo salón** inmediatamente después
+(09:00-11:00), y así sucesivamente. Esto usa 1 salón × 4 bloques en
+lugar de 4 salones × 1 bloque.
+
+Este reordenamiento ocurre automáticamente como **retroalimentación**
+dentro del bucle principal: cuando una asignación falla por falta de
+salones, el motor revisa si ya existe una asignación previa del mismo
+(profesor+materia) y, de ser así, intenta acoplar la nueva junto a
+ella en el mismo salón.
+
+### 11.8 Toggle de regla de separación 2.5h para clases en línea (2026-06-17)
 
 **Archivos:** `src/motor_horarios.py`, `src/UI/ventana_gestion.py`
 
