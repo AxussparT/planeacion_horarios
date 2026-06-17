@@ -108,11 +108,11 @@ class VentanaGestion:
             "2": ["S2A", "S2B", "S2C", "S2D", "S2E", "S2F"],
             "3": ["S3", "S4", "SE", "SF", "SU","SV"],
             "4": ["S4A", "S4B", "S4C", "S4D", "S4E"],
-            "5": ["S5A", "S5B", "S5C", "S5D", "S5E"],
+            "5": ["S5", "S6", "SG", "SH", "ST"],#PENDIENTE SZ
             "6": ["S6A", "S6B", "S6C", "S6D"],
-            "7": ["S7A", "S7B", "S7C", "S7D"],
+            "7": ["S7", "S8", "SI", "SJ"],
             "8": ["S8A", "S8B", "S8C"],
-            "9": ["S9A", "S9B", "S9C"]
+            "9": ["S9", "SX", "SW"]
         }
 
     def _confirmar_cierre(self):
