@@ -378,61 +378,82 @@ class GeneradorHorarios:
             asignado_completamente = False
             gen_prev = len(horarios_generados)
 
-            if es_en_linea:
-                salones_priorizados = sorted([s for s in self.salones if s.upper().startswith("EN_LINEA")])
-
-                for salon in salones_priorizados:
-                    if asignado_completamente:
-                        break
-                    for estrategia in estrategias:
-                        horarios_temporales = []
-                        if self.intentar_asignar_estrategia_simetrica(asignacion, estrategia, salon, horarios_temporales):
-                            horarios_generados.extend(horarios_temporales)
+            def _intentar_batch(antes=True, despues=True):
+                nonlocal asignado_completamente
+                bkey = (asignacion['profesor_id'], asignacion['materia_id'])
+                if bkey not in _batch_map:
+                    return
+                for ref in list(_batch_map[bkey]):
+                    salon_id = ref['salon_id']
+                    dia = ref['dia']
+                    h_ini = self._hora_a_slot(datetime.datetime.strptime(ref['hora_inicio'], "%H:%M:%S").time())
+                    h_fin = self._hora_a_slot(datetime.datetime.strptime(ref['hora_fin'], "%H:%M:%S").time())
+                    for slot_propuesto, lado in [(h_ini - bloques_totales, "ANTES"), (h_fin, "DESPUÉS")]:
+                        if lado == "ANTES" and (not antes or slot_propuesto < 0):
+                            continue
+                        if lado == "DESPUÉS" and (not despues or slot_propuesto + bloques_totales > self.SLOTS_DIARIOS):
+                            continue
+                        if self.es_posible_asignar(asignacion, dia, slot_propuesto, bloques_totales, salon_id):
+                            self.registrar_ocupacion(asignacion, dia, slot_propuesto, bloques_totales, salon_id)
+                            horario = {
+                                "asignacion_id": asignacion['asignacion_id'],
+                                "salon_id": salon_id,
+                                "dia": dia,
+                                "hora_inicio": self._slot_a_hora(slot_propuesto),
+                                "hora_fin": self._slot_a_hora(slot_propuesto + bloques_totales)
+                            }
+                            horarios_generados.append(horario)
+                            _batch_map[bkey].append(horario)
                             asignado_completamente = True
-                            break
+                            print(f"[BATCH] {asignacion.get('materia_nombre','?')} ({asignacion['grupo_id']}) colocado {lado} de {ref['hora_inicio']}-{ref['hora_fin']} en {salon_id}")
+                            return
 
-                if not asignado_completamente:
+            key = (asignacion['profesor_id'], asignacion['materia_id'])
+            if key in _batch_map and not es_en_linea and tipo_materia not in ('laboratorio', 'auditorio'):
+                _intentar_batch()
+
+            if not asignado_completamente:
+                if es_en_linea:
+                    salones_priorizados = sorted([s for s in self.salones if s.upper().startswith("EN_LINEA")])
+
                     for salon in salones_priorizados:
                         if asignado_completamente:
                             break
                         for estrategia in estrategias:
-                            exito_estrategia = True
                             horarios_temporales = []
-                            for dia, bloques_requeridos in estrategia:
-                                exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon, horarios_temporales)
-                                if not exito_bloque:
-                                    exito_estrategia = False
-                                    break
-                            if exito_estrategia:
+                            if self.intentar_asignar_estrategia_simetrica(asignacion, estrategia, salon, horarios_temporales):
                                 horarios_generados.extend(horarios_temporales)
                                 asignado_completamente = True
                                 break
-                            else:
-                                for ht in horarios_temporales:
-                                    self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
-            elif tipo_materia == 'laboratorio':
-                salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
-                salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
-
-                salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
-                salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
-
-                if salones_lab_ordenados and salones_norm_ordenados:
-                    for s_norm in salones_norm_ordenados:
-                        if asignado_completamente:
-                            break
-                        for s_lab in salones_lab_ordenados:
+                    if not asignado_completamente:
+                        for salon in salones_priorizados:
                             if asignado_completamente:
                                 break
                             for estrategia in estrategias:
+                                exito_estrategia = True
                                 horarios_temporales = []
-                                if self.intentar_asignar_estrategia_simetrica_mixta(asignacion, estrategia, s_norm, s_lab, horarios_temporales):
+                                for dia, bloques_requeridos in estrategia:
+                                    exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon, horarios_temporales)
+                                    if not exito_bloque:
+                                        exito_estrategia = False
+                                        break
+                                if exito_estrategia:
                                     horarios_generados.extend(horarios_temporales)
                                     asignado_completamente = True
                                     break
+                                else:
+                                    for ht in horarios_temporales:
+                                        self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
-                    if not asignado_completamente:
+                elif tipo_materia == 'laboratorio':
+                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
+                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
+
+                    salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
+                    salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
+
+                    if salones_lab_ordenados and salones_norm_ordenados:
                         for s_norm in salones_norm_ordenados:
                             if asignado_completamente:
                                 break
@@ -440,108 +461,123 @@ class GeneradorHorarios:
                                 if asignado_completamente:
                                     break
                                 for estrategia in estrategias:
-                                    exito_estrategia = True
                                     horarios_temporales = []
-                                    for i, (dia, bloques_requeridos) in enumerate(estrategia):
-                                        salon_a_usar = s_lab if (i % 2 != 0 or len(estrategia) == 1) else s_norm
-                                        exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon_a_usar, horarios_temporales)
-                                        if not exito_bloque:
-                                            exito_estrategia = False
-                                            break
-                                    if exito_estrategia:
+                                    if self.intentar_asignar_estrategia_simetrica_mixta(asignacion, estrategia, s_norm, s_lab, horarios_temporales):
                                         horarios_generados.extend(horarios_temporales)
                                         asignado_completamente = True
                                         break
-                                    else:
-                                        for ht in horarios_temporales:
-                                            self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
-            if not asignado_completamente and not es_en_linea:
-                if tipo_materia == 'auditorio':
-                    salones_aud = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'auditorio' and not s.upper().startswith("EN_LINEA")]
-                    salones_priorizados = sorted(salones_aud, key=lambda s: self.uso_salones.get(s, 0))
-                else:
-                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
-                    salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("EN_LINEA")]
-                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
-
-                    salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
-                    salones_tec_ordenados = sorted(salones_tec, key=lambda s: self.uso_salones.get(s, 0))
-                    salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
-
-                    if tipo_materia in ['tecnológica', 'tecnologica']:
-                        salones_priorizados = salones_tec_ordenados
-                    elif tipo_materia == 'laboratorio':
-                        salones_priorizados = salones_lab_ordenados + salones_norm_ordenados
+                        if not asignado_completamente:
+                            for s_norm in salones_norm_ordenados:
+                                if asignado_completamente:
+                                    break
+                                for s_lab in salones_lab_ordenados:
+                                    if asignado_completamente:
+                                        break
+                                    for estrategia in estrategias:
+                                        exito_estrategia = True
+                                        horarios_temporales = []
+                                        for i, (dia, bloques_requeridos) in enumerate(estrategia):
+                                            salon_a_usar = s_lab if (i % 2 != 0 or len(estrategia) == 1) else s_norm
+                                            exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon_a_usar, horarios_temporales)
+                                            if not exito_bloque:
+                                                exito_estrategia = False
+                                                break
+                                        if exito_estrategia:
+                                            horarios_generados.extend(horarios_temporales)
+                                            asignado_completamente = True
+                                            break
+                if not asignado_completamente and not es_en_linea:
+                    if tipo_materia == 'auditorio':
+                        salones_aud = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'auditorio' and not s.upper().startswith("EN_LINEA")]
+                        salones_priorizados = sorted(salones_aud, key=lambda s: self.uso_salones.get(s, 0))
                     else:
-                        salones_priorizados = salones_norm_ordenados + salones_tec_ordenados + salones_lab_ordenados
+                        salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
+                        salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("EN_LINEA")]
+                        salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
 
-                for salon in salones_priorizados:
-                    if asignado_completamente:
-                        break
-                    for estrategia in estrategias:
-                        horarios_temporales = []
-                        if self.intentar_asignar_estrategia_simetrica(asignacion, estrategia, salon, horarios_temporales):
-                            horarios_generados.extend(horarios_temporales)
-                            asignado_completamente = True
-                            break
+                        salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
+                        salones_tec_ordenados = sorted(salones_tec, key=lambda s: self.uso_salones.get(s, 0))
+                        salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
 
-                if not asignado_completamente:
+                        if tipo_materia in ['tecnológica', 'tecnologica']:
+                            salones_priorizados = salones_tec_ordenados
+                        elif tipo_materia == 'laboratorio':
+                            salones_priorizados = salones_lab_ordenados + salones_norm_ordenados
+                        else:
+                            salones_priorizados = salones_norm_ordenados + salones_tec_ordenados + salones_lab_ordenados
+
                     for salon in salones_priorizados:
                         if asignado_completamente:
                             break
                         for estrategia in estrategias:
-                            exito_estrategia = True
                             horarios_temporales = []
-                            for dia, bloques_requeridos in estrategia:
-                                exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon, horarios_temporales)
-                                if not exito_bloque:
-                                    exito_estrategia = False
-                                    break
-                            if exito_estrategia:
+                            if self.intentar_asignar_estrategia_simetrica(asignacion, estrategia, salon, horarios_temporales):
                                 horarios_generados.extend(horarios_temporales)
                                 asignado_completamente = True
                                 break
-                            else:
-                                for ht in horarios_temporales:
-                                    self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
+
+                    if not asignado_completamente:
+                        for salon in salones_priorizados:
+                            if asignado_completamente:
+                                break
+                            for estrategia in estrategias:
+                                exito_estrategia = True
+                                horarios_temporales = []
+                                for dia, bloques_requeridos in estrategia:
+                                    exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon, horarios_temporales)
+                                    if not exito_bloque:
+                                        exito_estrategia = False
+                                        break
+                                if exito_estrategia:
+                                    horarios_generados.extend(horarios_temporales)
+                                    asignado_completamente = True
+                                    break
+                                else:
+                                    for ht in horarios_temporales:
+                                        self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
+
+                if not asignado_completamente and tipo_materia == 'laboratorio':
+                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
+                    salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("EN_LINEA")]
+                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
+                    salones_priorizados = sorted(salones_norm + salones_tec + salones_lab, key=lambda s: self.uso_salones.get(s, 0))
+                    for salon in salones_priorizados:
+                        if asignado_completamente:
+                            break
+                        for estrategia in estrategias:
+                            horarios_temporales = []
+                            if self.intentar_asignar_estrategia_simetrica(asignacion, estrategia, salon, horarios_temporales):
+                                horarios_generados.extend(horarios_temporales)
+                                asignado_completamente = True
+                                break
+                    if not asignado_completamente:
+                        for salon in salones_priorizados:
+                            if asignado_completamente:
+                                break
+                            for estrategia in estrategias:
+                                exito_estrategia = True
+                                horarios_temporales = []
+                                for dia, bloques_requeridos in estrategia:
+                                    exito_bloque = self.intentar_asignar_bloque(asignacion, dia, bloques_requeridos, salon, horarios_temporales)
+                                    if not exito_bloque:
+                                        exito_estrategia = False
+                                        break
+                                if exito_estrategia:
+                                    horarios_generados.extend(horarios_temporales)
+                                    asignado_completamente = True
+                                    break
+                                else:
+                                    for ht in horarios_temporales:
+                                        self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
+
+                if not asignado_completamente and not es_en_linea and tipo_materia not in ('laboratorio', 'auditorio'):
+                    _intentar_batch()
 
             if asignado_completamente:
                 key = (asignacion['profesor_id'], asignacion['materia_id'])
                 for h in horarios_generados[gen_prev:]:
                     _batch_map.setdefault(key, []).append(h)
-
-            if not asignado_completamente and not es_en_linea and tipo_materia != 'auditorio':
-                key = (asignacion['profesor_id'], asignacion['materia_id'])
-                if key in _batch_map:
-                    for ref in list(_batch_map[key]):
-                        salon_id = ref['salon_id']
-                        dia = ref['dia']
-                        h_ini_ref = self._hora_a_slot(datetime.datetime.strptime(ref['hora_inicio'], "%H:%M:%S").time())
-                        h_fin_ref = self._hora_a_slot(datetime.datetime.strptime(ref['hora_fin'], "%H:%M:%S").time())
-                        h_dup_ref = h_fin_ref - h_ini_ref
-
-                        for slot_propuesto, lado in [(h_ini_ref - bloques_totales, "ANTES"), (h_fin_ref, "DESPUÉS")]:
-                            if lado == "ANTES" and slot_propuesto < 0:
-                                continue
-                            if lado == "DESPUÉS" and slot_propuesto + bloques_totales > self.SLOTS_DIARIOS:
-                                continue
-                            if self.es_posible_asignar(asignacion, dia, slot_propuesto, bloques_totales, salon_id):
-                                self.registrar_ocupacion(asignacion, dia, slot_propuesto, bloques_totales, salon_id)
-                                horario = {
-                                    "asignacion_id": asignacion['asignacion_id'],
-                                    "salon_id": salon_id,
-                                    "dia": dia,
-                                    "hora_inicio": self._slot_a_hora(slot_propuesto),
-                                    "hora_fin": self._slot_a_hora(slot_propuesto + bloques_totales)
-                                }
-                                horarios_generados.append(horario)
-                                _batch_map[key].append(horario)
-                                asignado_completamente = True
-                                print(f"[BATCH] {asignacion.get('materia_nombre','?')} ({asignacion['grupo_id']}) colocado {lado} de {ref['hora_inicio']}-{ref['hora_fin']} en {salon_id}")
-                                break
-                        if asignado_completamente:
-                            break
 
             if not asignado_completamente:
                 prof_id = asignacion.get('profesor_id', '?')

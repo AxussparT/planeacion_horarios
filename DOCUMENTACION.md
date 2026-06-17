@@ -265,27 +265,38 @@ ejecutar(modo)
   │      3. Tecnológicas/Laboratorio primero, Normal después
   │      4. Más horas primero
   │
-  ├── Para cada asignación:
-  │    ├── Calcular bloques_totales = horas_semana * 2
-  │    ├── Generar estrategias de distribución
-  │    │   (pares de días, cuádruples, o días individuales)
-  │    │
-  │    ├── [Si es EN LÍNEA]:
-  │    │   ├── Buscar salones cuyo ID empiece con "EN_LINEA"
-  │    │   ├── Intentar estrategia simétrica (mismo slot en todos los días)
-  │    │   └── [fallback] Intentar bloque por bloque
-  │    │
-  │    ├── [Si es LABORATORIO]:
-  │    │   ├── Buscar salones tipo Laboratorio + Normal
-  │    │   ├── Intentar estrategia simétrica mixta (alterna salon normal/lab)
-  │    │   └── [fallback] Intentar bloque por bloque
-  │    │
-  │    ├── [Si es PRESENCIAL]:
-  │    │   ├── Priorizar salones según tipo de materia
-  │    │   ├── Intentar estrategia simétrica
-  │    │   └── [fallback] Intentar bloque por bloque
-  │    │
-  │    └── [Si falló todo] → Generar alerta con diagnóstico
+    ├── Para cada asignación:
+    │    ├── Calcular bloques_totales = horas_semana * 2
+    │    ├── Generar estrategias de distribución
+    │    │   (pares de días, cuádruples, o días individuales)
+    │    │
+    │    ├── [Batch prioritario]:
+    │    │   Si el par (profesor_id, materia_id) ya tiene horarios
+    │    │   previos → intentar colocar el nuevo grupo ANTES o DESPUÉS
+    │    │   en el mismo salón (solo presencial, no lab/auditorio)
+    │    │
+    │    ├── [Si es EN LÍNEA]:
+    │    │   ├── Buscar salones cuyo ID empiece con "EN_LINEA"
+    │    │   ├── Intentar estrategia simétrica (mismo slot en todos los días)
+    │    │   └── [fallback] Intentar bloque por bloque
+    │    │
+    │    ├── [Si es LABORATORIO]:
+    │    │   ├── Buscar salones tipo Laboratorio + Normal
+    │    │   ├── Intentar estrategia simétrica mixta (alterna salon normal/lab)
+    │    │   └── [fallback] Intentar bloque por bloque
+    │    │   └── [fallback 2] Intentar cualquier salón
+    │    │
+    │    ├── [Si es PRESENCIAL]:
+    │    │   ├── Priorizar salones según tipo de materia
+    │    │   ├── Intentar estrategia simétrica
+    │    │   └── [fallback] Intentar bloque por bloque
+    │    │
+    │    ├── [Batch fallback]:
+    │    │   Si la asignación normal falló y hay batch previo,
+    │    │   reintentar colocación adyacente (solo presencial,
+    │    │   no lab/auditorio)
+    │    │
+    │    └── [Si falló todo] → Generar alerta con diagnóstico
   │
   └── guardar_en_bd() → Inserta horarios y marca asignaciones como 'asignado'
 ```
@@ -632,7 +643,7 @@ completo en el panel de texto inferior. Además, el messagebox ya no
 trunca las alertas a 5 — solo muestra un resumen y redirige a la
 pestaña Alertas.
 
-### 11.7 Optimización de lotes: misma materia en salón consecutivo (2026-06-17)
+### 11.7 Optimización de lotes: misma materia en salón consecutivo (2026-06-17, corregido 2026-06-17)
 
 **Archivo:** `src/motor_horarios.py`
 
@@ -640,20 +651,41 @@ Cuando un profesor imparte la **misma materia** a **múltiples grupos**,
 el motor ahora detecta esta situación y reutiliza el mismo salón para
 colocar los grupos **consecutivamente** (uno detrás de otro).
 
-**Antes:** Cada grupo ocupaba un salón diferente en el mismo horario.
-Si un profesor tenía 4 grupos, necesitaba 4 salones a la vez, y el 4º
-fallaba por "no hay salones disponibles".
+**Antes (v1 - fallback):** El motor intentaba asignar cada grupo
+de forma independiente. Si los grupos 2, 3, 4 lograban asignarse
+en diferentes salones, el batch (colocación consecutiva) nunca se
+activaba porque solo funcionaba como retry tras fallo.
 
-**Ahora:** El motor asigna el 1er grupo en un salón (ej. 07:00-09:00),
-luego coloca el 2º grupo en el **mismo salón** inmediatamente después
-(09:00-11:00), y así sucesivamente. Esto usa 1 salón × 4 bloques en
-lugar de 4 salones × 1 bloque.
+**Ahora (v2 - prioridad):** El batch se implementa como estrategia
+**prioritaria**: antes de cualquier intento de asignación independiente,
+si ya existe una asignación previa del mismo (profesor+materia), el
+motor primero intenta colocar el nuevo grupo **adyacente** (ANTES o
+DESPUÉS) en el mismo salón. Esto garantiza que todos los grupos de
+la misma materia compartan salón consecutivamente, sin depender de
+fallos previos.
 
-Este reordenamiento ocurre automáticamente como **retroalimentación**
-dentro del bucle principal: cuando una asignación falla por falta de
-salones, el motor revisa si ya existe una asignación previa del mismo
-(profesor+materia) y, de ser así, intenta acoplar la nueva junto a
-ella en el mismo salón.
+**Flujo actual:**
+1. **[Batch prioritario]** Si el par (profesor, materia) ya tiene horarios previos → intentar colocar adyacente en el mismo salón.
+2. **[Asignación normal]** Si el batch no fue posible (slot ocupado), intentar asignación independiente.
+3. **[Batch fallback]** Si la asignación normal falló, reintentar batch como último recurso.
+
+**Estructura:**
+```python
+# 1) Prioridad: colocar junto a asignaciones previas del mismo par
+if key in _batch_map and not es_en_linea and tipo_materia not in ('laboratorio', 'auditorio'):
+    _intentar_batch()
+
+if not asignado_completamente:
+    ...  # asignación normal (online, lab, presencial)
+
+# 2) Fallback: reintentar batch solo si todo lo demás falló
+if not asignado_completamente and not es_en_linea and tipo_materia not in ('laboratorio', 'auditorio'):
+    _intentar_batch()
+
+# 3) Registrar nuevos horarios en el batch_map
+if asignado_completamente:
+    _batch_map[key].extend(horarios_generados[gen_prev:])
+```
 
 ### 11.8 Toggle de regla de separación 2.5h para clases en línea (2026-06-17)
 
