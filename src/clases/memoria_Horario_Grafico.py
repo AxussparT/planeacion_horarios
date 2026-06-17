@@ -1,6 +1,28 @@
 import numpy as np
 import mysql.connector
+import re
 from src.conexion import get_conexion
+
+GRUPOS_POR_SEMESTRE = {
+    "1": ["S1A", "S1B", "S1C", "S1D", "S1E", "S1F"],
+    "2": ["S2A", "S2B", "S2C", "S2D", "S2E", "S2F"],
+    "3": ["S3", "S4", "SE", "SF", "SU", "SV"],
+    "4": ["S4A", "S4B", "S4C", "S4D", "S4E"],
+    "5": ["S5", "S6", "SG", "SH", "ST"],
+    "6": ["S6A", "S6B", "S6C", "S6D"],
+    "7": ["S7", "S8", "SI", "SJ"],
+    "8": ["S8A", "S8B", "S8C"],
+    "9": ["S9", "SX", "SW"]
+}
+
+def _semestre_de_grupo(grupo_id):
+    m = re.match(r'S(\d)', str(grupo_id))
+    if m:
+        return m.group(1)
+    for sem, grupos in GRUPOS_POR_SEMESTRE.items():
+        if grupo_id in grupos:
+            return sem
+    return "0"
 
 class MemoriaHorarioGrafico:
     def __init__(self):
@@ -42,7 +64,8 @@ class MemoriaHorarioGrafico:
             query = """
                 SELECT h.horario_id, h.salon_id, h.dia, h.hora_inicio, h.hora_fin,
                        a.profesor_id, a.grupo_id, m.nombre AS materia,
-                       p.nombre AS profesor_nombre
+                       p.nombre AS profesor_nombre,
+                       m.tipo AS materia_tipo, m.semestre_id AS materia_semestre
                 FROM horarios h
                 JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
                 JOIN materias m ON a.materia_id = m.materia_id
@@ -73,6 +96,16 @@ class MemoriaHorarioGrafico:
                     texto_celda = f"{reg['materia']}\n{reg['profesor_nombre']}\nSalón: {reg['salon_id']}"
 
                 verdadero_horario.append([texto_celda, idx_entidad, dia_col, idx_i, idx_f])
+
+                if modo == "Grupo" and reg.get('materia_tipo', '').lower() == 'auditorio':
+                    semestre = _semestre_de_grupo(reg['grupo_id'])
+                    grupos_semestre = GRUPOS_POR_SEMESTRE.get(semestre, [])
+                    for g in grupos_semestre:
+                        if g == reg['grupo_id']:
+                            continue
+                        idx_otro = dict_entidades.get(g)
+                        if idx_otro is not None:
+                            verdadero_horario.append([texto_celda, idx_otro, dia_col, idx_i, idx_f])
 
             return verdadero_horario, dict_entidades, nombres_entidades
 

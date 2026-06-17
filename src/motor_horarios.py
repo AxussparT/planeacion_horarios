@@ -17,6 +17,8 @@ class GeneradorHorarios:
         self.uso_salones = {}
         self.tipos_salones = {}
 
+        self.separacion_online_activa = True
+
     def _limpiar_matrices(self):
         self.ocupacion_salones = {}
         self.ocupacion_profesores = {}
@@ -148,7 +150,7 @@ class GeneradorHorarios:
         if periodo_valido is None:
             return False
 
-        if es_en_linea:
+        if es_en_linea and self.separacion_online_activa:
             base_prof_id = prof_id.replace('-L', '').replace('-l', '')
             max_slot_presencial = -1
 
@@ -166,8 +168,6 @@ class GeneradorHorarios:
             if self.ocupacion_salones.get((dia, salon_id, slot_actual)):
                 return False
             if self.ocupacion_profesores.get((dia, prof_id, slot_actual)):
-                return False
-            if self.ocupacion_grupos.get((dia, grupo_id, slot_actual)):
                 return False
 
         return True
@@ -455,20 +455,24 @@ class GeneradorHorarios:
                                             self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
             if not asignado_completamente and not es_en_linea:
-                salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
-                salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("EN_LINEA")]
-                salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
-
-                salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
-                salones_tec_ordenados = sorted(salones_tec, key=lambda s: self.uso_salones.get(s, 0))
-                salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
-
-                if tipo_materia in ['tecnológica', 'tecnologica']:
-                    salones_priorizados = salones_tec_ordenados
-                elif tipo_materia == 'laboratorio':
-                    salones_priorizados = salones_lab_ordenados + salones_norm_ordenados
+                if tipo_materia == 'auditorio':
+                    salones_aud = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'auditorio' and not s.upper().startswith("EN_LINEA")]
+                    salones_priorizados = sorted(salones_aud, key=lambda s: self.uso_salones.get(s, 0))
                 else:
-                    salones_priorizados = salones_norm_ordenados + salones_tec_ordenados + salones_lab_ordenados
+                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
+                    salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("EN_LINEA")]
+                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
+
+                    salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
+                    salones_tec_ordenados = sorted(salones_tec, key=lambda s: self.uso_salones.get(s, 0))
+                    salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
+
+                    if tipo_materia in ['tecnológica', 'tecnologica']:
+                        salones_priorizados = salones_tec_ordenados
+                    elif tipo_materia == 'laboratorio':
+                        salones_priorizados = salones_lab_ordenados + salones_norm_ordenados
+                    else:
+                        salones_priorizados = salones_norm_ordenados + salones_tec_ordenados + salones_lab_ordenados
 
                 for salon in salones_priorizados:
                     if asignado_completamente:
@@ -600,12 +604,64 @@ class GeneradorHorarios:
                             f"Revisar disponibilidad del profesor '{prof_nombre}', "
                             "o agregar más salones.")
 
-                alerta = (
-                    f"Materia: {mat_nombre.upper()} (Grupo {grupo_id})\n"
-                    f"Profesor: {prof_nombre.upper()}\n"
-                    f"Detalle: {'; '.join(causas)}\n"
-                    f"Sugerencias: {' | '.join(sugerencias[:3])}"
-                )
+                def _slot_a_hora_short(s):
+                    return self._slot_a_hora(s)[:5]
+
+                detalles_extra = []
+                detalles_extra.append(f"Horas requeridas: {horas_totales}h")
+                detalles_extra.append(f"Disponibilidad del profesor: {hrs_profesor:.0f}h en {num_dias} día(s)")
+                if periodos:
+                    for p in periodos:
+                        detalles_extra.append(f"  {p['dia']}: {_slot_a_hora_short(p['slot_inicio'])}-{_slot_a_hora_short(p['slot_fin'])}")
+                ocupadas = []
+                for (d, p, s) in sorted(self.ocupacion_profesores.keys()):
+                    if p == prof_id:
+                        ocupadas.append(f"{d} {_slot_a_hora_short(s)}")
+                if ocupadas:
+                    detalles_extra.append(f"Horarios ya ocupados del profesor: {', '.join(ocupadas[:10])}")
+                    if len(ocupadas) > 10:
+                        detalles_extra.append(f"  ... y {len(ocupadas)-10} más")
+
+                if not es_en_linea and self.salones:
+                    salones_compatibles = []
+                    for s in self.salones:
+                        if s.upper().startswith("EN_LINEA"):
+                            continue
+                        t_salon = self.tipos_salones.get(s, 'Normal').lower()
+                        if tipo_mat == 'auditorio' and t_salon == 'auditorio':
+                            salones_compatibles.append(s)
+                        elif tipo_mat == 'laboratorio' and t_salon in ['laboratorio', 'normal']:
+                            salones_compatibles.append(s)
+                        elif tipo_mat in ['tecnológica', 'tecnologica'] and t_salon in ['tecnológica', 'tecnologica']:
+                            salones_compatibles.append(s)
+                        elif tipo_mat == 'normal':
+                            salones_compatibles.append(s)
+
+                    if salones_compatibles:
+                        libres = []
+                        for s in salones_compatibles:
+                            for p in periodos:
+                                for slot in range(p['slot_inicio'], p['slot_fin']):
+                                    if not self.ocupacion_salones.get((p['dia'], s, slot)):
+                                        libres.append(f"{s} ({p['dia']} {_slot_a_hora_short(slot)})")
+                                        break
+                        if libres:
+                            detalles_extra.append(f"Salones compatibles con espacio libre: {', '.join(libres[:5])}")
+                            if len(libres) > 5:
+                                detalles_extra.append(f"  ... y {len(libres)-5} más")
+                        else:
+                            detalles_extra.append("Salones compatibles pero todos ocupados en los horarios del profesor.")
+
+                alerta = {
+                    "materia": mat_nombre.upper(),
+                    "materia_id": mat_id,
+                    "grupo": grupo_id,
+                    "profesor": prof_nombre.upper(),
+                    "profesor_id": prof_id,
+                    "causas": causas,
+                    "sugerencias": sugerencias[:3],
+                    "detalles_extra": detalles_extra
+                }
                 alertas_generadas.append(alerta)
                 causa_corta = causas[0] if causas else "sin causa identificada"
                 print(f"ALERTA: No se pudo asignar {mat_nombre} ({grupo_id}) - {causa_corta}")

@@ -146,7 +146,7 @@ class VentanaPrincipal:
 
         ttk.Label(mf_frame, text="Prioridad:", style='fondo.TLabel').grid(row=4, column=0, sticky='w', pady=4)
         self.combo_preferencia = ttk.Combobox(mf_frame, width=32, font=self._fuente_label, state='readonly')
-        self.combo_preferencia['values'] = ("Normal", "Tecnológica", "Laboratorio")
+        self.combo_preferencia['values'] = ("Normal", "Tecnológica", "Laboratorio", "Auditorio")
         self.combo_preferencia.grid(row=4, column=1, sticky='ew', padx=(12, 0), pady=4)
         mf_frame.columnconfigure(1, weight=1)
 
@@ -169,7 +169,7 @@ class VentanaPrincipal:
 
         ttk.Label(sf_frame, text="Tipo de aula:", style='fondo.TLabel').grid(row=2, column=0, sticky='w', pady=4)
         self.combo_tipo = ttk.Combobox(sf_frame, width=32, font=self._fuente_label, state='readonly')
-        self.combo_tipo['values'] = ("Normal", "Tecnológica", "Laboratorio")
+        self.combo_tipo['values'] = ("Normal", "Tecnológica", "Laboratorio", "Auditorio")
         self.combo_tipo.grid(row=2, column=1, sticky='ew', padx=(12, 0), pady=4)
         sf_frame.columnconfigure(1, weight=1)
 

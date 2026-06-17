@@ -42,15 +42,18 @@ class VentanaGestion:
         estilo.configure('TNotebook.Tab', background='#1a1f3e', foreground='#ffffff', padding=[10, 2])
         estilo.map('TNotebook.Tab', background=[('selected', '#0A0F1E')], foreground=[('selected', '#6D583A')])
 
+
         self.profesores_map = {}
         self.materias_map = {}
         self.semestres_map = {}
         self.lista_maestra_semestres = []
         self.lista_maestra_materias = []
+        self._lista_completa_profesores = []
         
         self.asignacion_seleccionada_id = None
         self.entidades_filtradas = []
         self._tensor_cargado = False
+        self._ultimas_alertas = []
         self._last_width = 0
         self._last_height = 0
         self._scale_factor = 1.0
@@ -172,11 +175,14 @@ class VentanaGestion:
         
         self.pes0 = ttk.Frame(self.notebook, style='blue.TFrame')
         self.pes1 = ttk.Frame(self.notebook, style='blue.TFrame')
+        self.pes_alertas = ttk.Frame(self.notebook, style='blue.TFrame')
         
         self.notebook.add(self.pes0, text='Gestionar')
+        self.notebook.add(self.pes_alertas, text='Alertas')
         self.notebook.add(self.pes1, text='Ver Horarios')
 
         self.Construccion_Ver_Horarios(self.pes1)
+        self._construir_pestana_alertas()
 
         frame_contenedor = ttk.Frame(self.pes0, style='blue.TFrame')
         frame_contenedor.pack(fill='x', pady=10)
@@ -194,6 +200,12 @@ class VentanaGestion:
         # --- Profesor ---
         ttk.Separator(self.frame_izq, orient='horizontal').pack(fill='x', pady=6)
         ttk.Label(self.frame_izq, text="Profesor", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(pady=(3, 2))
+        f_busca_prof = ttk.Frame(self.frame_izq, style='blue.TFrame')
+        f_busca_prof.pack(fill='x', padx=10, pady=(0, 2))
+        ttk.Label(f_busca_prof, text="Buscar:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left')
+        self.sv_busqueda_prof = tk.StringVar()
+        self.sv_busqueda_prof.trace_add("write", lambda *a: self._filtrar_profesores_combo())
+        ttk.Entry(f_busca_prof, textvariable=self.sv_busqueda_prof, font=self._fuente_label).pack(side='left', fill='x', expand=True, padx=(4, 0))
         self.combo_profesores = ttk.Combobox(self.frame_izq, width=32, font=self._fuente_label, state='readonly')
         self.combo_profesores.pack(pady=2, padx=10)
         self.combo_profesores.bind("<<ComboboxSelected>>", lambda e: self.actualizar_vista_previa())
@@ -229,6 +241,8 @@ class VentanaGestion:
         f_acciones = ttk.Frame(self.frame_izq, style='blue.TFrame')
         f_acciones.pack(fill='x', padx=10, pady=8)
         ttk.Button(f_acciones, text="Asignación Automática", command=self.iniciar_asignacion_automatica).pack(fill='x', pady=2)
+        self._separacion_online_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(f_acciones, text="Regla 2.5h (online tras presencial)", variable=self._separacion_online_var, style='Custom.TCheckbutton').pack(fill='x', pady=2)
         ttk.Button(f_acciones, text="Liberar Asignación", command=self.borrar_asignacion_seleccionada).pack(fill='x', pady=2)
         ttk.Button(f_acciones, text="Borrar Todas", command=self.formatear_asignaciones).pack(fill='x', pady=2)
 
@@ -280,6 +294,16 @@ class VentanaGestion:
         self.tabla_profesores.pack(fill='both', expand=True)
 
     # --- UTILIDADES ---
+    def _filtrar_profesores_combo(self):
+        texto = self.sv_busqueda_prof.get().strip().lower()
+        if not texto:
+            filtrados = self._lista_completa_profesores
+        else:
+            filtrados = [p for p in self._lista_completa_profesores if texto in p.lower()]
+        self.combo_profesores['values'] = filtrados
+        if filtrados:
+            self.combo_profesores.set(filtrados[0])
+
     def _obtener_id_valido(self, texto_combo, es_grupo=False):
         if not texto_combo: return None
         textos_invalidos = ["sin grupos", "cargando", "seleccione", "sin materias", "no asignado", "grupos llenos"]
@@ -427,6 +451,7 @@ class VentanaGestion:
                     return
                 try:
                     generador = GeneradorHorarios(conexion)
+                    generador.separacion_online_activa = self._separacion_online_var.get()
                     resultado = generador.ejecutar(modo=modo_seleccionado)
                     if isinstance(resultado, tuple):
                         cantidad, alertas = resultado
@@ -453,18 +478,15 @@ class VentanaGestion:
                     return
 
                 cantidad, alertas = datos
+                self._ultimas_alertas = alertas
+                self._mostrar_alertas_en_tabla()
                 if alertas:
-                    partes = []
-                    for i, a in enumerate(alertas[:5], 1):
-                        partes.append(f"─── Conflicto #{i} ───\n{a}\n")
-                    if len(alertas) > 5:
-                        partes.append(f"→ ... y {len(alertas) - 5} conflicto(s) más.\n")
-                    mensaje = (
+                    messagebox.showwarning(
+                        "Asignación con Conflictos",
                         f"Se asignaron {cantidad} horarios.\n"
-                        f"Hubo conflictos con {len(alertas)} materia(s):\n\n"
-                        + "".join(partes)
+                        f"Hubo conflictos con {len(alertas)} materia(s).\n\n"
+                        f"Revisa los detalles en la pestaña 'Alertas'."
                     )
-                    messagebox.showwarning("Asignación con Conflictos", mensaje)
                 else:
                     messagebox.showinfo("Éxito",
                         f"¡Perfecto! Se generaron {cantidad} horarios sin conflictos en modo '{modo_seleccionado}'.")
@@ -518,9 +540,9 @@ class VentanaGestion:
                 cur.execute("SELECT profesor_id, nombre FROM profesores ORDER BY nombre")
                 profesores = cur.fetchall()
                 self.profesores_map = {str(row[0]): f"{row[0]} - {row[1]}" for row in profesores}
-                lista_prof = list(self.profesores_map.values())
-                self.combo_profesores['values'] = lista_prof
-                if lista_prof: self.combo_profesores.set(lista_prof[0])
+                self._lista_completa_profesores = list(self.profesores_map.values())
+                self.combo_profesores['values'] = self._lista_completa_profesores
+                if self._lista_completa_profesores: self.combo_profesores.set(self._lista_completa_profesores[0])
 
                 cur.execute("SELECT id_semestre, nombre FROM semestres ORDER BY id_semestre")
                 semestres = cur.fetchall()
@@ -568,6 +590,95 @@ class VentanaGestion:
         if hasattr(self, 'sv_busqueda_asignaciones'):
             self.sv_busqueda_asignaciones.set("")
         self.actualizar_vista_previa(mostrar_todo=True)
+
+    # --- PESTAÑA DE ALERTAS ---
+    def _construir_pestana_alertas(self):
+        f_superior = ttk.Frame(self.pes_alertas, style='blue.TFrame')
+        f_superior.pack(fill='both', expand=True, padx=10, pady=10)
+
+        ttk.Label(f_superior, text="ALERTAS DE ASIGNACIÓN",
+                  background='#0A0F1E', foreground='white',
+                  font=self._fuente_titulo).pack(pady=(5, 10))
+
+        f_contenido = ttk.Frame(f_superior, style='blue.TFrame')
+        f_contenido.pack(fill='both', expand=True)
+
+        cols = ('Materia', 'Grupo', 'Profesor', 'Causa')
+        self.tabla_alertas = ttk.Treeview(f_contenido, columns=cols, show='headings', height=12)
+        for c in cols:
+            self.tabla_alertas.heading(c, text=c)
+        self.tabla_alertas.column('Materia', width=200)
+        self.tabla_alertas.column('Grupo', width=80)
+        self.tabla_alertas.column('Profesor', width=250)
+        self.tabla_alertas.column('Causa', width=350)
+        self.tabla_alertas.pack(side='top', fill='x', pady=(0, 5))
+        self.tabla_alertas.bind("<<TreeviewSelect>>", self._mostrar_detalle_alerta)
+
+        sb_a = ttk.Scrollbar(f_contenido, orient='vertical', command=self.tabla_alertas.yview)
+        self.tabla_alertas.configure(yscroll=sb_a.set)
+        sb_a.pack(side='right', fill='y')
+
+        ttk.Label(f_contenido, text="Detalle completo:",
+                  background='#0A0F1E', foreground='white',
+                  font=self._fuente_sub).pack(anchor='w', pady=(5, 2))
+
+        self.texto_detalle_alerta = tk.Text(f_contenido, height=14, wrap='word',
+                                            font=("Consolas", 10),
+                                            bg='#1a1a1a', fg='#e0e0e0',
+                                            relief='flat', bd=2)
+        self.texto_detalle_alerta.pack(fill='both', expand=True)
+
+        ttk.Button(f_superior, text="Limpiar Alertas",
+                   command=self._limpiar_alertas).pack(pady=5)
+
+    def _mostrar_alertas_en_tabla(self):
+        if not hasattr(self, 'tabla_alertas'):
+            return
+        for item in self.tabla_alertas.get_children():
+            self.tabla_alertas.delete(item)
+        self.texto_detalle_alerta.delete('1.0', tk.END)
+        for a in self._ultimas_alertas:
+            causa = a['causas'][0] if a.get('causas') else 'Sin causa identificada'
+            self.tabla_alertas.insert('', 'end', values=(
+                a.get('materia', '?'),
+                a.get('grupo', '?'),
+                a.get('profesor', '?'),
+                causa
+            ))
+
+    def _mostrar_detalle_alerta(self, event=None):
+        sel = self.tabla_alertas.selection()
+        if not sel:
+            return
+        idx = self.tabla_alertas.index(sel[0])
+        if idx >= len(self._ultimas_alertas):
+            return
+        a = self._ultimas_alertas[idx]
+        self.texto_detalle_alerta.delete('1.0', tk.END)
+        texto = f"MATERIA: {a.get('materia', '?')}  |  GRUPO: {a.get('grupo', '?')}\n"
+        texto += f"PROFESOR: {a.get('profesor', '?')}  |  ID: {a.get('profesor_id', '?')}\n"
+        texto += "-"*70 + "\n"
+        texto += "CAUSAS:\n"
+        for i, c in enumerate(a.get('causas', []), 1):
+            texto += f"  {i}. {c}\n"
+        texto += "\nSUGERENCIAS:\n"
+        for i, s in enumerate(a.get('sugerencias', []), 1):
+            texto += f"  {i}. {s}\n"
+        extras = a.get('detalles_extra', [])
+        if extras:
+            texto += "\nDETALLES TÉCNICOS:\n"
+            for e in extras:
+                texto += f"  {e}\n"
+        self.texto_detalle_alerta.insert('1.0', texto)
+        self.texto_detalle_alerta.see('1.0')
+
+    def _limpiar_alertas(self):
+        self._ultimas_alertas = []
+        if hasattr(self, 'tabla_alertas'):
+            for item in self.tabla_alertas.get_children():
+                self.tabla_alertas.delete(item)
+        if hasattr(self, 'texto_detalle_alerta'):
+            self.texto_detalle_alerta.delete('1.0', tk.END)
 
     def filtrar_materias_por_periodo(self, event=None):
         periodo = self.combo_periodos.get()
@@ -739,7 +850,7 @@ class VentanaGestion:
                     like = f"%{texto_busqueda}%"
                     params.extend([like, like, like, like])
 
-                sql += " LIMIT 50"
+                sql += " ORDER BY a.asignacion_id"
                 cur.execute(sql, params)
                 resultados = cur.fetchall()
 
