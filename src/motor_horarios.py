@@ -794,3 +794,19 @@ class GeneradorHorarios:
         except Exception as e:
             self.conexion.rollback()
             raise e
+##6 1
+#2 recursadores
+#3
+#4 normales, 2 con menos
+#5= 4 completos 1 imconpletro 1 adicional de ingles
+#7 3 completos y 1 incompleto
+#9 3 completos
+#añador seccion para dar de alta grupos para modificarlo y quitar la lista fija
+
+
+#cambiar asignacion a mas manual
+
+#martes ultima revision
+#expo jueves 25 junio
+#quitar esa parte d elos laboratorios
+
