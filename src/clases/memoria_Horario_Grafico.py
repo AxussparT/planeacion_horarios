@@ -3,25 +3,37 @@ import mysql.connector
 import re
 from src.conexion import get_conexion
 
-GRUPOS_POR_SEMESTRE = {
-    "1": ["S1A", "S1B", "S1C", "S1D", "S1E", "S1F"],
-    "2": ["S2A", "S2B", "S2C", "S2D", "S2E", "S2F"],
-    "3": ["S3", "S4", "SE", "SF", "SU", "SV"],
-    "4": ["S4A", "S4B", "S4C", "S4D", "S4E"],
-    "5": ["S5", "S6", "SG", "SH", "ST"],
-    "6": ["S6A", "S6B", "S6C", "S6D"],
-    "7": ["S7", "S8", "SI", "SJ"],
-    "8": ["S8A", "S8B", "S8C"],
-    "9": ["S9", "SX", "SW"]
-}
+def _cargar_grupos_desde_bd():
+    grupos = {}
+    conn = get_conexion()
+    if not conn:
+        return grupos
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT grupo_id, nivel FROM grupos ORDER BY nivel, grupo_id")
+        for row in cursor.fetchall():
+            gid = row[0]
+            nivel = str(row[1]) if row[1] is not None else "0"
+            if nivel not in grupos:
+                grupos[nivel] = []
+            grupos[nivel].append(gid)
+    except Exception as e:
+        print(f"Error cargando grupos desde BD: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+    return grupos
+
+GRUPOS_POR_SEMESTRE = _cargar_grupos_desde_bd()
 
 def _semestre_de_grupo(grupo_id):
+    if GRUPOS_POR_SEMESTRE:
+        for sem, grupos in GRUPOS_POR_SEMESTRE.items():
+            if grupo_id in grupos:
+                return sem
     m = re.match(r'S(\d)', str(grupo_id))
     if m:
         return m.group(1)
-    for sem, grupos in GRUPOS_POR_SEMESTRE.items():
-        if grupo_id in grupos:
-            return sem
     return "0"
 
 class MemoriaHorarioGrafico:
@@ -117,6 +129,9 @@ class MemoriaHorarioGrafico:
             conn.close()
 
     def inicializar_y_llenar(self, modo="Salón"):
+        global GRUPOS_POR_SEMESTRE
+        if not GRUPOS_POR_SEMESTRE:
+            GRUPOS_POR_SEMESTRE = _cargar_grupos_desde_bd()
         self.modo = modo
         datos_clases, dict_entidades, nombres_entidades = self.obtener_datos_servidor(modo)
 

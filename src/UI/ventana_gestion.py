@@ -75,48 +75,22 @@ class VentanaGestion:
 
     def _cargar_grupos_desde_bd(self):
         grupos = {}
-        fallback = self._grupos_fallback()
         try:
             with obtener_cursor() as ctx:
                 if ctx is None:
-                    return fallback
+                    return grupos
                 cur, conn = ctx
-                cur.execute("SELECT grupo_id FROM grupos ORDER BY grupo_id")
+                cur.execute("SELECT grupo_id, nivel FROM grupos ORDER BY nivel, grupo_id")
                 filas = cur.fetchall()
                 for row in filas:
                     gid = row[0]
-                    import re
-                    m = re.match(r'S(\d)', str(gid))
-                    sem = m.group(1) if m else "0"
-                    if sem not in grupos:
-                        grupos[sem] = []
-                    grupos[sem].append(gid)
+                    nivel = str(row[1]) if row[1] is not None else "0"
+                    if nivel not in grupos:
+                        grupos[nivel] = []
+                    grupos[nivel].append(gid)
         except Exception as e:
             print(f"Error cargando grupos desde BD: {e}")
-            
-        # FIX: Combinar inteligentemente los grupos de la BD con tu fallback
-        # Así nunca "olvida" el S1B, S1C, etc., aunque solo el S1A esté en la BD.
-        for sem, grps in fallback.items():
-            if sem not in grupos:
-                grupos[sem] = []
-            for g in grps:
-                if g not in grupos[sem]:
-                    grupos[sem].append(g)
-                    
         return grupos
-    
-    def _grupos_fallback(self):
-        return {
-            "1": ["S1A", "S1B", "S1C", "S1D", "S1E", "S1F"],
-            "2": ["S2A", "S2B", "S2C", "S2D", "S2E", "S2F"],
-            "3": ["S3", "S4", "SE", "SF", "SU","SV"],
-            "4": ["S4A", "S4B", "S4C", "S4D", "S4E"],
-            "5": ["S5", "S6", "SG", "SH", "ST"],#PENDIENTE SZ
-            "6": ["S6A", "S6B", "S6C", "S6D"],
-            "7": ["S7", "S8", "SI", "SJ"],
-            "8": ["S8A", "S8B", "S8C"],
-            "9": ["S9", "SX", "SW"]
-        }
 
     def _confirmar_cierre(self):
         if self._en_operacion:
@@ -722,7 +696,7 @@ class VentanaGestion:
             self.combo_semestre.set("No Asignado")
             self.combo_grupos.set("")
 
-    def obtener_o_crear_grupo(self, grupo_texto):
+    def obtener_o_crear_grupo(self, grupo_texto, nivel=None):
         grupo_texto = grupo_texto.strip().upper()
         if not grupo_texto:
             messagebox.showerror("Error", "Campo Grupo vacío")
@@ -735,8 +709,12 @@ class VentanaGestion:
             try:
                 cur.execute("SELECT grupo_id FROM grupos WHERE grupo_id = %s", (grupo_id,))
                 if cur.fetchone():
+                    if nivel is not None:
+                        cur.execute("UPDATE grupos SET nivel = %s WHERE grupo_id = %s", (nivel, grupo_id))
                     return grupo_id
-                cur.execute("INSERT INTO grupos (grupo_id, nombre) VALUES (%s, %s)", (grupo_id, grupo_id))
+                if nivel is None:
+                    nivel = 0
+                cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, %s)", (grupo_id, nivel))
                 self.cargar_combos_bd() 
                 messagebox.showinfo("Éxito", f"Grupo '{grupo_id}' creado.")
                 return grupo_id
@@ -751,8 +729,10 @@ class VentanaGestion:
         if not prof_id or not mat_id:
             messagebox.showerror("Error", "Seleccione Profesor y Materia válidos")
             return
-            
-        grupo_id = self.obtener_o_crear_grupo(self.combo_grupos.get())
+
+        nivel = self.materias_map.get(mat_id)
+        
+        grupo_id = self.obtener_o_crear_grupo(self.combo_grupos.get(), nivel=nivel)
         if not grupo_id:
             return
         
@@ -820,7 +800,7 @@ class VentanaGestion:
                         a.asignacion_id,
                         a.profesor_id, IFNULL(p.nombre, 'Sin Profesor'), 
                         a.materia_id, IFNULL(m.nombre, 'Materia Desconocida'),
-                        a.grupo_id, IFNULL(g.nombre, 'Sin Grupo'),
+                        a.grupo_id, IFNULL(g.grupo_id, 'Sin Grupo'),
                         IFNULL(a.estado, 'pendiente') AS estado
                     FROM asignaciones a
                     LEFT JOIN profesores p ON a.profesor_id = p.profesor_id

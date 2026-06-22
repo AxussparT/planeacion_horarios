@@ -5,9 +5,10 @@ import mysql.connector
 from src.conexion import get_conexion
 from tkinter import messagebox
 from src.UI.ventana_gestion import VentanaGestion
-from src.clases.validacion_bd import validar_y_registrar_profesor
+from src.clases.profesor import profesor
 from src.clases.materia import materia
 from src.clases.salon import salon
+from src.clases.grupo import grupo
 import os
 import sys
 
@@ -28,6 +29,7 @@ class VentanaPrincipal:
         self.cache_profesores = []
         self.cache_materias = []
         self.cache_salones = []
+        self.cache_grupos = []
         self._last_width = 0
         self._last_height = 0
         self._scale_factor = 1.0
@@ -104,11 +106,6 @@ class VentanaPrincipal:
         self._crear_campo(pf_frame, "No. Cuenta", "entry_no_cuenta", 0)
         self._crear_campo(pf_frame, "Nombre(s)", "entry_nombre", 1)
         self._crear_campo(pf_frame, "Apellidos", "entry_apellido", 2)
-
-        ttk.Label(pf_frame, text="¿En línea?:", style='fondo.TLabel').grid(row=3, column=0, sticky='w', pady=4)
-        self.combo_linea = ttk.Combobox(pf_frame, width=32, font=self._fuente_label, state='readonly')
-        self.combo_linea['values'] = ("Sí", "No", "Ambos")
-        self.combo_linea.grid(row=3, column=1, sticky='ew', padx=(12, 0), pady=4)
         pf_frame.columnconfigure(1, weight=1)
 
         # --- Disponibilidad ---
@@ -179,6 +176,24 @@ class VentanaPrincipal:
         ttk.Button(f_btns_salon, text="Agregar Salon", command=self.evento_Salones, style='Danger.TButton').grid(row=0, column=0, padx=4)
         ttk.Button(f_btns_salon, text="Eliminar", command=self.eliminar_salon, style='Danger.TButton').grid(row=0, column=1, padx=4)
 
+        # ===== SECCIÓN GRUPOS =====
+        ttk.Separator(self.frame_izquierdo_principal, orient='horizontal').pack(fill='x', pady=10)
+        lbl_grp = ttk.Label(self.frame_izquierdo_principal, text="GRUPOS", style='fondo.TLabel', font=self._fuente_titulo)
+        lbl_grp.pack(pady=(10, 10))
+
+        gf_frame = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
+        gf_frame.pack(fill='x', padx=25, pady=(0, 5))
+
+        self._crear_campo(gf_frame, "Grupo", "entry_grupo_id", 0)
+        self._crear_campo(gf_frame, "Semestre", "entry_grupo_nivel", 1)
+        gf_frame.columnconfigure(1, weight=1)
+
+        f_btns_grupo = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
+        f_btns_grupo.pack(fill='x', padx=25, pady=15)
+        f_btns_grupo.columnconfigure((0, 1), weight=1)
+        ttk.Button(f_btns_grupo, text="Agregar Grupo", command=self.evento_grupos, style='Danger.TButton').grid(row=0, column=0, padx=4)
+        ttk.Button(f_btns_grupo, text="Eliminar", command=self.eliminar_grupo, style='Danger.TButton').grid(row=0, column=1, padx=4)
+
         self.tab_gestion = ttk.Frame(self.notebook, style='blue.TFrame')
         self.notebook.add(self.tab_gestion, text='Gestión')
         self._gestion_control = VentanaGestion(parent_frame=self.tab_gestion)
@@ -202,7 +217,7 @@ class VentanaPrincipal:
 
         self.sv_busqueda = tk.StringVar()
         self.sv_busqueda.trace_add("write", lambda *a: self.filtrar_profesores())
-        self.crear_seccion_tabla("Profesores Registrados", "sv_busqueda", "tabla_profesores", ('Cuenta', 'Profesor', 'Disponibilidad', 'En línea'))
+        self.crear_seccion_tabla("Profesores Registrados", "sv_busqueda", "tabla_profesores", ('No. Cuenta', 'Profesor', 'Disponibilidad'))
         self.tabla_profesores.bind("<<TreeviewSelect>>", self.cargar_profesor_seleccionado)
 
         self.sv_busqueda_mat = tk.StringVar()
@@ -214,6 +229,13 @@ class VentanaPrincipal:
 
         self.crear_seccion_tabla("Salones Registrados", None, "tabla_salones", ('Aula', 'Capacidad', 'Tipo'))
         self.tabla_salones.bind("<<TreeviewSelect>>", self.cargar_salon_seleccionado)
+
+        self.sv_busqueda_grupo = tk.StringVar()
+        self.sv_busqueda_grupo.trace_add("write", lambda *a: self.filtrar_grupos())
+        self.sv_filtro_semestre_grupo = tk.StringVar(value="Todos")
+        self.sv_filtro_semestre_grupo.trace_add("write", lambda *a: self.filtrar_grupos())
+        self.crear_seccion_tabla("Grupos Registrados", "sv_busqueda_grupo", "tabla_grupos", ('Grupo', 'Semestre'), combo_semestre_var="sv_filtro_semestre_grupo")
+        self.tabla_grupos.bind("<<TreeviewSelect>>", self.cargar_grupo_seleccionado)
 
     # =================== PERIODOS UI ===================
 
@@ -368,7 +390,6 @@ class VentanaPrincipal:
         self.entry_no_cuenta.delete(0, tk.END)
         self.entry_nombre.delete(0, tk.END)
         self.entry_apellido.delete(0, tk.END)
-        self.combo_linea.set("")
         self.limpiar_periodos_ui()
 
     def cargar_profesor_seleccionado(self, event):
@@ -378,22 +399,22 @@ class VentanaPrincipal:
         v = self.tabla_profesores.item(item, "values")
         self.limpiar_campos_profesor()
 
-        self.entry_no_cuenta.insert(0, v[0])
-        self.entry_no_cuenta.config(state='readonly')
-        nombres = v[1].split(" ", 1)
+        no_cuenta = v[0]
+        nombre = v[1] if len(v) > 1 else ''
+        self.entry_no_cuenta.insert(0, no_cuenta)
+        nombres = nombre.split(" ", 1)
         self.entry_nombre.insert(0, nombres[0])
         if len(nombres) > 1:
             self.entry_apellido.insert(0, nombres[1])
 
-        valor_bd_linea = str(v[3]).strip().upper()
-        if valor_bd_linea == "SI" or valor_bd_linea == "SÍ":
-            self.combo_linea.set("Sí")
-        elif valor_bd_linea == "NO":
-            self.combo_linea.set("No")
-        else:
-            self.combo_linea.set(v[3])
+        self._profesor_id_seleccionado = None
+        for d in self.cache_profesores:
+            if d[1] == no_cuenta:
+                self._profesor_id_seleccionado = d[0]
+                break
+        if not self._profesor_id_seleccionado:
+            self._profesor_id_seleccionado = no_cuenta
 
-        cuenta = v[0]
         conn = get_conexion()
         if conn:
             cur = conn.cursor(dictionary=True)
@@ -403,7 +424,7 @@ class VentanaPrincipal:
                        FROM profesor_disponibilidad
                        WHERE profesor_id = %s
                        ORDER BY id""",
-                    (cuenta,)
+                    (v[0],)
                 )
                 filas = cur.fetchall()
                 periodos_agrupados = {}
@@ -424,55 +445,27 @@ class VentanaPrincipal:
             self.cargar_periodos_en_ui([])
 
     def evento_boton_profesores(self):
-        self.entry_no_cuenta.config(state='normal')
-        cuenta_base = self.entry_no_cuenta.get().strip()
+        no_cuenta = self.entry_no_cuenta.get().strip()
         full_n = f"{self.entry_nombre.get()} {self.entry_apellido.get()}".strip()
-
-        opcion_linea = self.combo_linea.get().strip().upper()
 
         periodos = self.obtener_periodos_desde_ui()
         if not periodos:
             messagebox.showwarning("Aviso", "Debe agregar al menos un periodo con días y horario.")
             return
 
-        if not cuenta_base:
+        if not no_cuenta:
             messagebox.showwarning("Aviso", "El número de cuenta es obligatorio.")
             return
 
-        exito = False
-        conn = get_conexion()
-        cur = conn.cursor()
-
-        try:
-            if opcion_linea in ["NO", "AMBOS"]:
-                cuenta_presencial = cuenta_base.replace("-L", "")
-                if validar_y_registrar_profesor(cuenta_presencial, full_n, periodos, "No"):
-                    exito = True
-
-            if opcion_linea in ["SÍ", "SI", "AMBOS"]:
-                cuenta_linea = cuenta_base if cuenta_base.endswith("-L") else f"{cuenta_base}-L"
-                if validar_y_registrar_profesor(cuenta_linea, full_n, periodos, "Sí"):
-                    exito = True
-
-            if exito:
-                conn.commit()
-                self.mostrar_datos_profesor()
-                self._gestion_control.cargar_combos_bd()
-                self.limpiar_campos_profesor()
-                messagebox.showinfo("Éxito", "Datos del profesor guardados/actualizados correctamente.")
-            else:
-                messagebox.showwarning("Atención", "No se realizó ningún cambio. Verifique la opción de modalidad seleccionada.")
-
-        except Exception as e:
-            conn.rollback()
-            messagebox.showerror("Error", f"Fallo al guardar: {e}")
-        finally:
-            cur.close()
-            conn.close()
+        if profesor(no_cuenta, full_n, periodos):
+            self.mostrar_datos_profesor()
+            self._gestion_control.cargar_combos_bd()
+            self.limpiar_campos_profesor()
 
     def eliminar_profesor(self):
-        self.entry_no_cuenta.config(state='normal')
-        pid = self.entry_no_cuenta.get().strip()
+        pid = getattr(self, '_profesor_id_seleccionado', None)
+        if not pid:
+            pid = self.entry_no_cuenta.get().strip()
         if not pid:
             return
         if messagebox.askyesno("Confirmar Eliminación", f"¿Estás seguro de eliminar al profesor {pid}? Esto borrará también sus asignaciones y horarios."):
@@ -504,16 +497,16 @@ class VentanaPrincipal:
             cur = conn.cursor()
             try:
                 cur.execute("""
-                    SELECT p.profesor_id, p.nombre, p.en_linea,
+                    SELECT p.profesor_id, p.no_cuenta, p.nombre,
                            GROUP_CONCAT(CONCAT(pd.dia, ' ', pd.hora_inicio, '-', pd.hora_fin) ORDER BY pd.id SEPARATOR '; ') AS disponibilidad
                     FROM profesores p
                     LEFT JOIN profesor_disponibilidad pd ON p.profesor_id = pd.profesor_id
-                    GROUP BY p.profesor_id, p.nombre, p.en_linea
+                    GROUP BY p.profesor_id, p.no_cuenta, p.nombre
                     ORDER BY p.nombre
                 """)
                 self.cache_profesores = cur.fetchall()
             except Exception:
-                cur.execute("SELECT profesor_id, nombre, '' as en_linea, '' as disponibilidad FROM profesores")
+                cur.execute("SELECT profesor_id, no_cuenta, nombre, '' as disponibilidad FROM profesores")
                 self.cache_profesores = cur.fetchall()
             finally:
                 cur.close()
@@ -523,12 +516,15 @@ class VentanaPrincipal:
     def refrescar_tabla_prof(self, datos):
         self.tabla_profesores.delete(*self.tabla_profesores.get_children())
         for d in datos:
-            prof_id, nombre, en_linea, disp = d[0], d[1], d[2], d[3] if len(d) > 3 else ''
-            self.tabla_profesores.insert("", "end", values=(prof_id, nombre, disp, en_linea))
+            prof_id = d[0]
+            no_cuenta = d[1] if len(d) > 1 and d[1] is not None else ''
+            nombre = d[2] if len(d) > 2 else ''
+            disp = d[3] if len(d) > 3 else ''
+            self.tabla_profesores.insert("", "end", values=(no_cuenta, nombre, disp))
 
     def filtrar_profesores(self):
         t = self.sv_busqueda.get().lower()
-        f = [p for p in self.cache_profesores if t in str(p[0]).lower() or t in str(p[1]).lower()]
+        f = [p for p in self.cache_profesores if t in str(p[0]).lower() or t in str(p[1]).lower() or t in str(p[2]).lower()]
         self.refrescar_tabla_prof(f)
 
     # =================== LÓGICA MATERIAS ===================
@@ -660,6 +656,83 @@ class VentanaPrincipal:
                 self.mostrar_datos_materias()
                 self.limpiar_campos_materia()
                 messagebox.showinfo("Éxito", "Materia eliminada correctamente.")
+
+    # =================== LÓGICA GRUPOS ===================
+
+    def cargar_grupo_seleccionado(self, event):
+        item = self.tabla_grupos.focus()
+        if not item:
+            return
+        v = self.tabla_grupos.item(item, "values")
+        self.entry_grupo_id.delete(0, tk.END)
+        self.entry_grupo_nivel.delete(0, tk.END)
+        self.entry_grupo_id.insert(0, v[0])
+        self.entry_grupo_nivel.insert(0, v[1])
+
+    def evento_grupos(self):
+        g = self.entry_grupo_id.get()
+        n = self.entry_grupo_nivel.get()
+        if grupo(g, n):
+            self.mostrar_datos_grupos()
+            self._gestion_control.cargar_combos_bd()
+            self.entry_grupo_id.delete(0, tk.END)
+            self.entry_grupo_nivel.delete(0, tk.END)
+
+    def eliminar_grupo(self):
+        grupo_id = self.entry_grupo_id.get().strip().upper()
+        if not grupo_id:
+            return
+        if messagebox.askyesno("Confirmar Eliminación", f"¿Estás seguro de eliminar el grupo '{grupo_id}'?"):
+            from src.conexion import obtener_cursor
+            exito = False
+            with obtener_cursor() as ctx:
+                if ctx is None:
+                    return
+                cur, conn = ctx
+                try:
+                    cur.execute("DELETE FROM horarios WHERE asignacion_id IN (SELECT asignacion_id FROM asignaciones WHERE grupo_id = %s)", (grupo_id,))
+                    cur.execute("DELETE FROM asignaciones WHERE grupo_id = %s", (grupo_id,))
+                    cur.execute("DELETE FROM grupos WHERE grupo_id = %s", (grupo_id,))
+                    exito = True
+                except Exception as e:
+                    conn.rollback()
+                    messagebox.showerror("Error de Base de Datos", str(e))
+            if exito:
+                self.mostrar_datos_grupos()
+                self._gestion_control.cargar_combos_bd()
+                self.entry_grupo_id.delete(0, tk.END)
+                self.entry_grupo_nivel.delete(0, tk.END)
+                messagebox.showinfo("Éxito", "Grupo eliminado correctamente.")
+
+    def mostrar_datos_grupos(self):
+        self.cache_grupos = []
+        conn = get_conexion()
+        if conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT grupo_id, nivel FROM grupos ORDER BY nivel, grupo_id")
+                self.cache_grupos = cur.fetchall()
+            except Exception:
+                self.cache_grupos = []
+            finally:
+                cur.close()
+                conn.close()
+        self.refrescar_tabla_grp(self.cache_grupos)
+
+    def refrescar_tabla_grp(self, datos):
+        if hasattr(self, 'tabla_grupos'):
+            self.tabla_grupos.delete(*self.tabla_grupos.get_children())
+            for d in datos:
+                self.tabla_grupos.insert("", "end", values=d)
+
+    def filtrar_grupos(self):
+        t = self.sv_busqueda_grupo.get().lower()
+        s = self.sv_filtro_semestre_grupo.get()
+        if not hasattr(self, 'cache_grupos'):
+            self.mostrar_datos_grupos()
+            return
+        f = [g for g in self.cache_grupos if (t in str(g[0]).lower() or t in str(g[1]).lower()) and (s == "Todos" or str(g[1]) == s)]
+        self.refrescar_tabla_grp(f)
 
     # =================== ESCALADO ===================
 

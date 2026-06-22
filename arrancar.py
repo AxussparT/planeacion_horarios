@@ -26,4 +26,5 @@ if __name__ == "__main__":
     app.mostrar_datos_profesor()
     app.mostrar_datos_materias()
     app.mostrar_datos_salones()
+    app.mostrar_datos_grupos()
     root.mainloop()
