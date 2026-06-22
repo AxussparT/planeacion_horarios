@@ -402,10 +402,14 @@ class VentanaPrincipal:
         no_cuenta = v[0]
         nombre = v[1] if len(v) > 1 else ''
         self.entry_no_cuenta.insert(0, no_cuenta)
-        nombres = nombre.split(" ", 1)
-        self.entry_nombre.insert(0, nombres[0])
-        if len(nombres) > 1:
-            self.entry_apellido.insert(0, nombres[1])
+        partes = nombre.split()
+        prefijos = {"DR.", "MTRO.", "MTRA.", "ING.", "LIC.", "LICDA.", "ARQ.", "C.P.", "M.C.", "M.A."}
+        if len(partes) >= 2 and (partes[0].endswith('.') or partes[0].upper() in prefijos):
+            self.entry_nombre.insert(0, f"{partes[0]} {partes[1]}")
+            self.entry_apellido.insert(0, " ".join(partes[2:]))
+        else:
+            self.entry_nombre.insert(0, partes[0] if partes else '')
+            self.entry_apellido.insert(0, " ".join(partes[1:]))
 
         self._profesor_id_seleccionado = None
         for d in self.cache_profesores:
@@ -457,10 +461,10 @@ class VentanaPrincipal:
             messagebox.showwarning("Aviso", "El número de cuenta es obligatorio.")
             return
 
-        if profesor(no_cuenta, full_n, periodos):
-            self.mostrar_datos_profesor()
-            self._gestion_control.cargar_combos_bd()
-            self.limpiar_campos_profesor()
+        profesor(no_cuenta, full_n, periodos)
+        self.mostrar_datos_profesor()
+        self._gestion_control.cargar_combos_bd()
+        self.limpiar_campos_profesor()
 
     def eliminar_profesor(self):
         pid = getattr(self, '_profesor_id_seleccionado', None)
