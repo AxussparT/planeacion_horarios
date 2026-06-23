@@ -428,7 +428,8 @@ class VentanaPrincipal:
             messagebox.showwarning("Aviso", "El número de cuenta es obligatorio.")
             return
 
-        profesor(no_cuenta, full_n, [])
+        periodos = self.obtener_periodos_desde_ui()
+        profesor(no_cuenta, full_n, periodos)
         self.limpiar_campos_profesor()
         self._refresh_all()
 
