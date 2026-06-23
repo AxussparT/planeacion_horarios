@@ -108,18 +108,6 @@ class VentanaPrincipal:
         self._crear_campo(pf_frame, "Apellidos", "entry_apellido", 2)
         pf_frame.columnconfigure(1, weight=1)
 
-        # --- Disponibilidad ---
-        ttk.Separator(self.frame_izquierdo_principal, orient='horizontal').pack(fill='x', pady=8)
-        ttk.Label(self.frame_izquierdo_principal, text="DISPONIBILIDAD (periodos)", style='fondo.TLabel', font=self._fuente_sub).pack(pady=5)
-        self.frame_periodos = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
-        self.frame_periodos.pack(fill='x', padx=15, pady=2)
-        self.agregar_periodo_ui()
-        self.btn_agregar_periodo = ttk.Button(
-            self.frame_izquierdo_principal, text="+ Añadir más",
-            command=self.agregar_periodo_ui, style='Danger.TButton'
-        )
-        self.btn_agregar_periodo.pack(pady=5)
-
         # --- Botones Profesor ---
         f_btns = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
         f_btns.pack(fill='x', padx=25, pady=15)
@@ -193,6 +181,18 @@ class VentanaPrincipal:
         f_btns_grupo.columnconfigure((0, 1), weight=1)
         ttk.Button(f_btns_grupo, text="Agregar Grupo", command=self.evento_grupos, style='Danger.TButton').grid(row=0, column=0, padx=4)
         ttk.Button(f_btns_grupo, text="Eliminar", command=self.eliminar_grupo, style='Danger.TButton').grid(row=0, column=1, padx=4)
+
+        # ===== BOTÓN ASIGNAR SALONES =====
+        ttk.Separator(self.frame_izquierdo_principal, orient='horizontal').pack(fill='x', pady=15)
+        f_asig = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
+        f_asig.pack(fill='x', padx=25, pady=(5, 20))
+        f_asig.columnconfigure(0, weight=1)
+        ttk.Button(
+            f_asig,
+            text="EMPEZAR ASIGNACIONES DE AULA",
+            command=self._iniciar_asignacion_aula,
+            style='Danger.TButton'
+        ).grid(row=0, column=0, sticky='ew', ipady=8)
 
         self.tab_gestion = ttk.Frame(self.notebook, style='blue.TFrame')
         self.notebook.add(self.tab_gestion, text='Gestión')
@@ -390,7 +390,7 @@ class VentanaPrincipal:
         self.entry_no_cuenta.delete(0, tk.END)
         self.entry_nombre.delete(0, tk.END)
         self.entry_apellido.delete(0, tk.END)
-        self.limpiar_periodos_ui()
+        self._profesor_id_seleccionado = None
 
     def cargar_profesor_seleccionado(self, event):
         item = self.tabla_profesores.focus()
@@ -419,52 +419,18 @@ class VentanaPrincipal:
         if not self._profesor_id_seleccionado:
             self._profesor_id_seleccionado = no_cuenta
 
-        conn = get_conexion()
-        if conn:
-            cur = conn.cursor(dictionary=True)
-            try:
-                cur.execute(
-                    """SELECT dia, hora_inicio, hora_fin
-                       FROM profesor_disponibilidad
-                       WHERE profesor_id = %s
-                       ORDER BY id""",
-                    (v[0],)
-                )
-                filas = cur.fetchall()
-                periodos_agrupados = {}
-                for f in filas:
-                    clave = (str(f['hora_inicio']), str(f['hora_fin']))
-                    if clave not in periodos_agrupados:
-                        h_i = ':'.join(str(f['hora_inicio']).split(':')[:2])
-                        h_f = ':'.join(str(f['hora_fin']).split(':')[:2])
-                        periodos_agrupados[clave] = {'hora_inicio': h_i, 'hora_fin': h_f, 'dias': []}
-                    periodos_agrupados[clave]['dias'].append(f['dia'])
-                self.cargar_periodos_en_ui(list(periodos_agrupados.values()))
-            except Exception:
-                self.cargar_periodos_en_ui([])
-            finally:
-                cur.close()
-                conn.close()
-        else:
-            self.cargar_periodos_en_ui([])
-
     def evento_boton_profesores(self):
+        self.master.update_idletasks()
         no_cuenta = self.entry_no_cuenta.get().strip()
         full_n = f"{self.entry_nombre.get()} {self.entry_apellido.get()}".strip()
-
-        periodos = self.obtener_periodos_desde_ui()
-        if not periodos:
-            messagebox.showwarning("Aviso", "Debe agregar al menos un periodo con días y horario.")
-            return
 
         if not no_cuenta:
             messagebox.showwarning("Aviso", "El número de cuenta es obligatorio.")
             return
 
-        profesor(no_cuenta, full_n, periodos)
-        self.mostrar_datos_profesor()
-        self._gestion_control.cargar_combos_bd()
+        profesor(no_cuenta, full_n, [])
         self.limpiar_campos_profesor()
+        self._refresh_all()
 
     def eliminar_profesor(self):
         pid = getattr(self, '_profesor_id_seleccionado', None)
@@ -489,9 +455,8 @@ class VentanaPrincipal:
                     conn.rollback()
                     messagebox.showerror("Error de Base de Datos", str(e))
             if exito:
-                self._gestion_control.cargar_combos_bd()
-                self.mostrar_datos_profesor()
                 self.limpiar_campos_profesor()
+                self._refresh_all()
                 messagebox.showinfo("Éxito", "Profesor eliminado correctamente.")
 
     def mostrar_datos_profesor(self):
@@ -534,16 +499,16 @@ class VentanaPrincipal:
     # =================== LÓGICA MATERIAS ===================
 
     def evento_materias(self):
+        self.master.update_idletasks()
         c = self.entry_materia_clave.get()
         n = self.entry_materia_nom.get()
         h = self.entry_materia_horas.get()
         s = self.entry_materia_semestre.get()
         t = self.combo_preferencia.get()
         if materia(c, n, h, s, t):
-            self.mostrar_datos_materias()
-            self._gestion_control.cargar_combos_bd()
             for e in [self.entry_materia_clave, self.entry_materia_nom, self.entry_materia_horas, self.entry_materia_semestre]:
                 e.delete(0, tk.END)
+            self._refresh_all()
 
     def mostrar_datos_materias(self):
         self.cache_materias.clear()
@@ -580,14 +545,15 @@ class VentanaPrincipal:
     # =================== LÓGICA SALONES ===================
 
     def evento_Salones(self):
+        self.master.update_idletasks()
         aula = self.entry_num_aula.get()
         cap = self.entry_capacidad_aula.get()
         tipo = self.combo_tipo.get()
         if salon(numero_aula=aula, capacidad=cap, tipo=tipo):
-            self.mostrar_datos_salones()
             self.entry_num_aula.delete(0, tk.END)
             self.entry_capacidad_aula.delete(0, tk.END)
             self.combo_tipo.set("")
+            self._refresh_all()
 
     def mostrar_datos_salones(self):
         conn = get_conexion()
@@ -597,6 +563,8 @@ class VentanaPrincipal:
         conn.close()
         self.tabla_salones.delete(*self.tabla_salones.get_children())
         for r in res:
+            if r[0].upper().startswith("MEDIACION_TECNOLOGICA"):
+                continue
             self.tabla_salones.insert("", "end", values=r)
 
     def eliminar_salon(self):
@@ -618,8 +586,8 @@ class VentanaPrincipal:
                     conn.rollback()
                     messagebox.showerror("Error de Base de Datos", str(e))
             if exito:
-                self.mostrar_datos_salones()
                 self.limpiar_campos_salon()
+                self._refresh_all()
                 messagebox.showinfo("Éxito", "Salón eliminado correctamente.")
 
     def limpiar_campos_salon(self):
@@ -657,8 +625,8 @@ class VentanaPrincipal:
                     conn.rollback()
                     messagebox.showerror("Error de Base de Datos", str(e))
             if exito:
-                self.mostrar_datos_materias()
                 self.limpiar_campos_materia()
+                self._refresh_all()
                 messagebox.showinfo("Éxito", "Materia eliminada correctamente.")
 
     # =================== LÓGICA GRUPOS ===================
@@ -674,13 +642,13 @@ class VentanaPrincipal:
         self.entry_grupo_nivel.insert(0, v[1])
 
     def evento_grupos(self):
+        self.master.update_idletasks()
         g = self.entry_grupo_id.get()
         n = self.entry_grupo_nivel.get()
         if grupo(g, n):
-            self.mostrar_datos_grupos()
-            self._gestion_control.cargar_combos_bd()
             self.entry_grupo_id.delete(0, tk.END)
             self.entry_grupo_nivel.delete(0, tk.END)
+            self._refresh_all()
 
     def eliminar_grupo(self):
         grupo_id = self.entry_grupo_id.get().strip().upper()
@@ -702,10 +670,9 @@ class VentanaPrincipal:
                     conn.rollback()
                     messagebox.showerror("Error de Base de Datos", str(e))
             if exito:
-                self.mostrar_datos_grupos()
-                self._gestion_control.cargar_combos_bd()
                 self.entry_grupo_id.delete(0, tk.END)
                 self.entry_grupo_nivel.delete(0, tk.END)
+                self._refresh_all()
                 messagebox.showinfo("Éxito", "Grupo eliminado correctamente.")
 
     def mostrar_datos_grupos(self):
@@ -737,6 +704,21 @@ class VentanaPrincipal:
             return
         f = [g for g in self.cache_grupos if (t in str(g[0]).lower() or t in str(g[1]).lower()) and (s == "Todos" or str(g[1]) == s)]
         self.refrescar_tabla_grp(f)
+
+    # =================== REFRESCO BATCHEADO ===================
+
+    def _refresh_all(self):
+        self.master.update_idletasks()
+        self.mostrar_datos_profesor()
+        self.mostrar_datos_materias()
+        self.mostrar_datos_salones()
+        self.mostrar_datos_grupos()
+        self.master.after(10, self._gestion_control.cargar_combos_bd)
+
+    # =================== ASIGNACIÓN DE AULAS ===================
+
+    def _iniciar_asignacion_aula(self):
+        self._gestion_control.iniciar_asignacion_automatica()
 
     # =================== ESCALADO ===================
 

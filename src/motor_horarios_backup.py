@@ -58,7 +58,6 @@ class GeneradorHorarios:
             SELECT a.asignacion_id, a.profesor_id, a.materia_id, a.grupo_id,
                    p.nombre as profesor_nombre,
                    p.en_linea,
-                   a.modalidad,
                    m.nombre as materia_nombre,
                    IFNULL(m.horas_semana, 4) as horas_semana,
                    IFNULL(m.tipo, 'Normal') as tipo_materia,
@@ -97,25 +96,6 @@ class GeneradorHorarios:
         salones_bd = self.cursor.fetchall()
         self.salones = [row['salon_id'] for row in salones_bd]
         self.tipos_salones = {row['salon_id']: (row['tipo'] or 'Normal') for row in salones_bd}
-
-        # Auto-crear salones MEDIACION_TECNOLOGICA si hacen falta
-        online_count = sum(
-            1 for a in self.asignaciones
-            if str(a.get('en_linea', 'NO')).upper() in ['SI', 'SÍ']
-            or str(a.get('modalidad', 'Presencial')) == 'Mediacion Tecnologica'
-        )
-        mt_salones = [s for s in self.salones if s.upper().startswith("MEDIACION_TECNOLOGICA")]
-        while len(mt_salones) < online_count:
-            idx = len(mt_salones) + 1
-            nuevo_id = f"MEDIACION_TECNOLOGICA_{idx}"
-            try:
-                self.cursor.execute("INSERT INTO salones (salon_id, capacidad, tipo) VALUES (%s, 999, 'Normal')", (nuevo_id,))
-                self.salones.append(nuevo_id)
-                self.tipos_salones[nuevo_id] = 'Normal'
-                mt_salones.append(nuevo_id)
-            except Exception:
-                idx += 1
-                continue
 
     def _cargar_horarios_existentes(self):
         sql = """
@@ -434,7 +414,7 @@ class GeneradorHorarios:
 
             if not asignado_completamente:
                 if es_en_linea:
-                    salones_priorizados = sorted([s for s in self.salones if s.upper().startswith("MEDIACION_TECNOLOGICA")])
+                    salones_priorizados = sorted([s for s in self.salones if s.upper().startswith("EN_LINEA")])
 
                     for salon in salones_priorizados:
                         if asignado_completamente:
@@ -467,8 +447,8 @@ class GeneradorHorarios:
                                         self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
                 elif tipo_materia == 'laboratorio':
-                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
-                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
+                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
+                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
 
                     salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
                     salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
@@ -509,12 +489,12 @@ class GeneradorHorarios:
                                             break
                 if not asignado_completamente and not es_en_linea:
                     if tipo_materia == 'auditorio':
-                        salones_aud = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'auditorio' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
+                        salones_aud = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'auditorio' and not s.upper().startswith("EN_LINEA")]
                         salones_priorizados = sorted(salones_aud, key=lambda s: self.uso_salones.get(s, 0))
                     else:
-                        salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
-                        salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
-                        salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
+                        salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
+                        salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("EN_LINEA")]
+                        salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
 
                         salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
                         salones_tec_ordenados = sorted(salones_tec, key=lambda s: self.uso_salones.get(s, 0))
@@ -558,9 +538,9 @@ class GeneradorHorarios:
                                         self._deshacer_ocupacion(asignacion, ht['dia'], self._hora_a_slot(datetime.datetime.strptime(ht['hora_inicio'], "%H:%M:%S").time()), ht['salon_id'], bloques_requeridos)
 
                 if not asignado_completamente and tipo_materia == 'laboratorio':
-                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
-                    salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
-                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
+                    salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("EN_LINEA")]
+                    salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("EN_LINEA")]
+                    salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("EN_LINEA")]
                     salones_priorizados = sorted(salones_norm + salones_tec + salones_lab, key=lambda s: self.uso_salones.get(s, 0))
                     for salon in salones_priorizados:
                         if asignado_completamente:
@@ -654,7 +634,7 @@ class GeneradorHorarios:
                     if not es_en_linea and self.salones:
                         salones_compatibles = []
                         for s in self.salones:
-                            if s.upper().startswith("MEDIACION_TECNOLOGICA"):
+                            if s.upper().startswith("EN_LINEA"):
                                 continue
                             t_salon = self.tipos_salones.get(s, 'Normal').lower()
 
@@ -720,7 +700,7 @@ class GeneradorHorarios:
                 if not es_en_linea and self.salones:
                     salones_compatibles = []
                     for s in self.salones:
-                        if s.upper().startswith("MEDIACION_TECNOLOGICA"):
+                        if s.upper().startswith("EN_LINEA"):
                             continue
                         t_salon = self.tipos_salones.get(s, 'Normal').lower()
                         if tipo_mat == 'auditorio' and t_salon == 'auditorio':

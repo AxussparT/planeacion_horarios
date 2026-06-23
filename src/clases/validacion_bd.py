@@ -41,19 +41,12 @@ def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos):
 
         if existente:
             profesor_id = existente[0]
-            primer_periodo = periodos[0] if periodos else {}
             cursor.execute("""
                 UPDATE profesores
-                SET nombre = %s,
-                    disponible_inicio = %s,
-                    disponible_fin = %s,
-                    dias_disponibles = %s
+                SET nombre = %s
                 WHERE profesor_id = %s
             """, (
                 nombre_completo,
-                formatear_hora(primer_periodo.get('hora_inicio', '')),
-                formatear_hora(primer_periodo.get('hora_fin', '')),
-                primer_periodo.get('dias', ''),
                 profesor_id
             ))
 
@@ -73,15 +66,11 @@ def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos):
             return True
         else:
             profesor_id = _generar_profesor_id(cursor)
-            primer_periodo = periodos[0] if periodos else {}
             cursor.execute("""
                 INSERT INTO profesores (profesor_id, no_cuenta, nombre, disponible_inicio, disponible_fin, dias_disponibles, en_linea)
-                VALUES (%s, %s, %s, %s, %s, %s, 'NO')
+                VALUES (%s, %s, %s, '00:00:00', '00:00:00', '', 'NO')
             """, (
-                profesor_id, no_cuenta, nombre_completo,
-                formatear_hora(primer_periodo.get('hora_inicio', '')),
-                formatear_hora(primer_periodo.get('hora_fin', '')),
-                primer_periodo.get('dias', '')
+                profesor_id, no_cuenta, nombre_completo
             ))
 
             sql_insert_disp = """INSERT INTO profesor_disponibilidad (profesor_id, dia, hora_inicio, hora_fin)

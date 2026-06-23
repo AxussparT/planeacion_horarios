@@ -1,3 +1,4 @@
+-- Active: 1782075630773@@127.0.0.1@3306@bd_seso
 -- Migración: Reemplazar campo nombre por nivel en tabla grupos
 -- Ejecutar: mysql -u root -p bd_seso < migrar_grupos.sql
 
@@ -10,3 +11,6 @@ UPDATE grupos SET nivel = 0 WHERE nivel IS NULL;
 
 -- Eliminar columna nombre (ya no se usa)
 ALTER TABLE grupos DROP COLUMN nombre;
+
+
+ALTER TABLE asignaciones ADD COLUMN modalidad VARCHAR(30) NOT NULL DEFAULT 'Presencial' AFTER hora_fin;

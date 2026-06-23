@@ -55,15 +55,23 @@ servicio_S/
 ├── arrancar.py                      # Punto de entrada
 ├── arrancar.spec                    # Configuración PyInstaller
 ├── DOCUMENTACION.md                 # Este archivo
-├── migrar_disponibilidad.sql        # Migración de disponibilidad multi-periodo
+├── migrar_disponibilidad.sql               # Migración de disponibilidad multi-periodo
+├── migrar_grupos.sql                       # Migración: columna nivel en grupos + modalidad en asignaciones
+├── migrar_profesores.sql                   # Migración: columna no_cuenta, regenerar profesor_id
+├── migrar_asignaciones_periodo.sql         # Migración: columnas periodo, hora_inicio, hora_fin, modalidad
+├── migrar_modalidad_periodo.sql            # Migración: columna modalidad en profesor_disponibilidad
+├── migrar_salones_mediacion.sql            # Migración: renombrar EN_LINEA → MEDIACION_TECNOLOGICA
 ├── assets/
 │   └── fondo.png                    # Imagen de fondo de la ventana
 ├── src/
 │   ├── conexion.py                  # Conexión a MySQL
-│   ├── motor_horarios.py            # Algoritmo de generación automática de horarios
+│   ├── motor_horarios.py            # Algoritmo original de generación automática
+│   ├── motor_horarios_backup.py     # Backup exacto del motor original
+│   ├── motor_horarios_nuevo.py      # Copia del motor para adaptar a nuevo esquema
 │   ├── resp_motor.py                # (vacio - reservado)
 │   ├── clases/
 │   │   ├── __init__.py
+│   │   ├── grupo.py                 # Modelo de grupos (grupo_id, nivel)
 │   │   ├── materia.py               # Modelo y guardado de materias
 │   │   ├── profesor.py              # Modelo y guardado de profesores
 │   │   ├── salon.py                 # Modelo y guardado de salones
@@ -73,7 +81,7 @@ servicio_S/
 │   └── UI/
 │       ├── __init__.py
 │       ├── ventana_principal.py     # Ventana principal (pestaña Personal)
-│       └── ventana_gestion.py       # Ventana de gestión (pestañas Gestionar y Ver Horarios)
+│       └── ventana_gestion.py       # Ventana de gestión (pestañas Gestionar, Alertas y Ver Horarios)
 ```
 
 ---
@@ -87,11 +95,12 @@ arrancar.py
     │
     ├── Crea VentanaPrincipal (tk.Tk)
     │       ├── Pestaña "Personal"   (tab_personal)
-    │       │       ├── Panel izquierdo: formularios de Profesores, Materias, Salones
-    │       │       └── Panel derecho: tablas de datos con búsqueda
+    │       │       ├── Panel izquierdo: formularios de Profesores, Materias, Salones, Grupos
+    │       │       └── Panel derecho: tablas de datos con búsqueda y filtro por semestre
     │       └── Pestaña "Gestión"    (tab_gestion)
-    │               └── VentanaGestion (embebida)
+    │               └── VentanaGestion (embebida via parent_frame)
     │                       ├── Pestaña "Gestionar": asignaciones manuales y automáticas
+    │                       ├── Pestaña "Alertas": detalle de conflictos de asignación
     │                       └── Pestaña "Ver Horarios": visualización gráfica (matplotlib)
     │
     └── mainloop()
@@ -103,12 +112,12 @@ arrancar.py
 
 | Tabla                    | Propósito                                      |
 |--------------------------|-------------------------------------------------|
-| `profesores`             | Profesores (con variante -L para online)        |
-| `profesor_disponibilidad`| Disponibilidad horaria por día (multi-periodo)  |
-| `materias`               | Materias con horas, semestre y tipo             |
-| `salones`                | Salones con capacidad y tipo                    |
-| `grupos`                 | Grupos (SA, SU, S3A, etc.)                      |
-| `asignaciones`           | Relación profesor-materia-grupo                 |
+| `profesores`             | Profesores (con no_cuenta, profesor_id auto-generado P0001…) |
+| `profesor_disponibilidad`| Disponibilidad horaria por día (multi-periodo, con modalidad)|
+| `materias`               | Materias con horas, semestre y tipo                         |
+| `salones`                | Salones con capacidad y tipo (incluye MEDIACION_TECNOLOGICA)|
+| `grupos`                 | Grupos (S1A, S2B, etc.) con nivel (semestre)               |
+| `asignaciones`           | Relación profesor-materia-grupo-periodo-modalidad (con estado, hora_inicio, hora_fin)|
 | `horarios`               | Horarios generados (salón, día, hora)           |
 | `semestres`              | Catálogo de semestres                           |
 
@@ -119,17 +128,14 @@ arrancar.py
 ### 6.1 `arrancar.py` — Punto de entrada
 
 ```python
-# Crea la ventana raíz de Tkinter
 root = tk.Tk()
-# Asigna un ícono personalizado
 icono = tk.PhotoImage(file=ruta_recurso('src/UI/logo ph.png'))
 root.iconphoto(True, icono)
-# Instancia la ventana principal
 app = VentanaPrincipal(root)
-# Carga datos iniciales en las tablas
 app.mostrar_datos_profesor()
 app.mostrar_datos_materias()
 app.mostrar_datos_salones()
+app.mostrar_datos_grupos()    # ← Se agregó carga de grupos
 root.mainloop()
 ```
 
@@ -161,14 +167,13 @@ with obtener_cursor() as ctx:
 
 ```python
 class profesor:
-    def __init__(self, cuenta, nombre_completo, periodos, linea):
+    def __init__(self, cuenta, nombre_completo, periodos):
         # Delega en validar_y_registrar_profesor()
 ```
 
-- `cuenta`: ID del profesor (ej. "P003" o "P003-L")
-- `nombre_completo`: Nombre completo
+- `cuenta`: No. de cuenta proporcionado por el usuario (el `profesor_id` se auto-genera como P0001…)
+- `nombre_completo`: Nombre completo (los títulos DR., MTRO., etc. se separan automáticamente)
 - `periodos`: Lista de dicts con `{dias, hora_inicio, hora_fin}`
-- `linea`: "Sí", "No" o "Ambos"
 
 ---
 
@@ -179,14 +184,17 @@ class profesor:
 | Función                                | Propósito                                    |
 |----------------------------------------|----------------------------------------------|
 | `formatear_hora(hora_str)`             | Normaliza "7:00" → "07:00:00"               |
+| `_generar_profesor_id(cursor)`         | Genera el siguiente ID (P0001, P0002...)     |
 | `validar_y_registrar_profesor(...)`     | Inserta o actualiza profesor + disponibilidad|
 
 **Lógica de `validar_y_registrar_profesor`:**
 
-1. Verifica si el `profesor_id` ya existe en `profesores`
-2. Si existe → actualiza nombre y campos base, borra y re-inserta `profesor_disponibilidad`
-3. Si no existe → inserta en `profesores` y en `profesor_disponibilidad`
-4. Guarda los periodos expandiendo cada día como fila individual en `profesor_disponibilidad`
+1. Recibe `no_cuenta` (ya no `profesor_id`) y datos del profesor
+2. Busca en BD por `no_cuenta` en lugar de `profesor_id`
+3. Si existe → actualiza nombre (`nom_profesor`) y re-inserta `profesor_disponibilidad`
+4. Si no existe → genera `profesor_id` autocontador (`P0001`, `P0002`...) con `_generar_profesor_id()`, e inserta en `profesores` y `profesor_disponibilidad`
+5. Usa `obtener_cursor()` (context manager de `conexion.py`) en lugar de `conexion.connect()`/`cursor.close()` manual
+6. Guarda los periodos expandiendo cada día como fila individual en `profesor_disponibilidad` (con `hora_inicio`, `hora_fin`, `dia`)
 
 ---
 
@@ -197,7 +205,7 @@ class materia:
     def __init__(self, clave, nombre, horas_semana, semestre, tipo):
 ```
 
-- `tipo`: "Normal", "Tecnológica" o "Laboratorio"
+- `tipo`: "Normal", "Tecnológica", "Laboratorio" o "Auditorio"
 
 Delega en `Validar_materia.validar_y_registrar_materia()`.
 
@@ -208,8 +216,8 @@ Delega en `Validar_materia.validar_y_registrar_materia()`.
 **Función principal:** `validar_y_registrar_materia(clave, nombre, horas_semana, semestre, tipo)`
 
 1. Verifica si la materia ya existe por `materia_id`
-2. Si existe → pregunta si desea actualizar
-3. Si no existe → inserta
+2. Si existe → pregunta si desea actualizar (incluyendo el tipo)
+3. Si no existe → inserta con `tipo` ("Normal", "Tecnológica", "Laboratorio", "Auditorio")
 
 ---
 
@@ -220,15 +228,35 @@ class salon:
     def __init__(self, numero_aula, capacidad, tipo):
 ```
 
-Valida que capacidad sea numérico, luego inserta en tabla `salones`.
+Valida que capacidad sea numérico, luego inserta en tabla `salones` usando `obtener_cursor()`.
+Los salones con tipo `MEDIACION_TECNOLOGICA` se filtran automáticamente al mostrar la tabla de salones en la UI.
 
 ---
 
-### 6.8 `src/motor_horarios.py` — ALGORITMO DE ASIGNACIÓN AUTOMÁTICA
+### 6.8 `src/clases/grupo.py` — Modelo Grupo
+
+```python
+class grupo:
+    def __init__(self, grupo_id, nivel):
+```
+
+- `grupo_id`: identificador del grupo (ej. "101", "101I")
+- `nivel`: semestre al que pertenece (1-9)
+- Inserta o actualiza en tabla `grupos` usando `obtener_cursor()`
+
+---
+
+### 6.9 `src/motor_horarios_nuevo.py` — ASIGNACIÓN DE SALONES
 
 **Clase principal:** `GeneradorHorarios`
 
-#### 6.8.1 Concepto de SLOT
+**Nota:** Este es el nuevo motor que reemplazó al original (`motor_horarios.py` y su
+backup `motor_horarios_backup.py`). La diferencia fundamental es que ya no asigna
+horarios (días ni horas) — esos los define el usuario al crear las asignaciones
+con periodo fijo (`hora_inicio`, `hora_fin`). El motor solo asigna **salones** a
+cada día disponible del profesor.
+
+#### 6.9.1 Concepto de SLOT
 
 El día se divide en **30 slots** de 30 minutos cada uno, empezando a las 7:00 AM:
 
@@ -242,7 +270,7 @@ Slot 29 = 21:30
 
 Conversiones: `_hora_a_slot()` y `_slot_a_hora()`.
 
-#### 6.8.2 Matrices de ocupación
+#### 6.9.2 Matrices de ocupación
 
 Tres diccionarios booleanos:
 
@@ -252,109 +280,82 @@ Tres diccionarios booleanos:
 | `ocupacion_profesores[dia,prof,slot]`| (str, str, int) → bool  | Profesor ocupado?       |
 | `ocupacion_grupos[dia,grupo,slot]`  | (str, str, int) → bool  | Grupo ocupado?          |
 
-#### 6.8.3 Flujo de `ejecutar(modo)`
+#### 6.9.3 Auto-creación de salones de mediación
+
+En `cargar_datos()`, el motor cuenta cuántas asignaciones tienen modalidad
+"Mediacion Tecnologica" y auto-crea salones `MEDIACION_TECNOLOGICA_N` si los
+existentes no son suficientes.
+
+#### 6.9.4 Flujo de `ejecutar(modo)`
 
 ```
 ejecutar(modo)
-  ├── cargar_datos(modo)        → Carga asignaciones, disponibilidad, salones
-  ├── _limpiar_matrices()       → Resetea ocupación y uso_salones
-  ├── [si modo=parcial] _cargar_horarios_existentes() → Marca horarios previos como ocupados
+  ├── cargar_datos(modo)         → Carga asignaciones (con hora_i/hora_f),
+  │                                disponibilidad por profesor, salones
+  ├── _limpiar_matrices()        → Resetea ocupación + uso_salones +
+  │                                salon_por_materia_profesor (caché de salón preferido)
+  ├── [si modo=parcial] _cargar_horarios_existentes() → Marca horarios previos
   ├── Ordenar asignaciones:
-  │      1. Presenciales primero, online después
+  │      1. Presenciales primero, mediación tecnológica después
   │      2. Por semestre (menor primero)
   │      3. Tecnológicas/Laboratorio primero, Normal después
   │      4. Más horas primero
   │
-    ├── Para cada asignación:
-    │    ├── Calcular bloques_totales = horas_semana * 2
-    │    ├── Generar estrategias de distribución
-    │    │   (pares de días, cuádruples, o días individuales)
-    │    │
-    │    ├── [Batch prioritario]:
-    │    │   Si el par (profesor_id, materia_id) ya tiene horarios
-    │    │   previos → intentar colocar el nuevo grupo ANTES o DESPUÉS
-    │    │   en el mismo salón (solo presencial, no lab/auditorio)
-    │    │
-    │    ├── [Si es EN LÍNEA]:
-    │    │   ├── Buscar salones cuyo ID empiece con "EN_LINEA"
-    │    │   ├── Intentar estrategia simétrica (mismo slot en todos los días)
-    │    │   └── [fallback] Intentar bloque por bloque
-    │    │
-    │    ├── [Si es LABORATORIO]:
-    │    │   ├── Buscar salones tipo Laboratorio + Normal
-    │    │   ├── Intentar estrategia simétrica mixta (alterna salon normal/lab)
-    │    │   └── [fallback] Intentar bloque por bloque
-    │    │   └── [fallback 2] Intentar cualquier salón
-    │    │
-    │    ├── [Si es PRESENCIAL]:
-    │    │   ├── Priorizar salones según tipo de materia
-    │    │   ├── Intentar estrategia simétrica
-    │    │   └── [fallback] Intentar bloque por bloque
-    │    │
-    │    ├── [Batch fallback]:
-    │    │   Si la asignación normal falló y hay batch previo,
-    │    │   reintentar colocación adyacente (solo presencial,
-    │    │   no lab/auditorio)
-    │    │
-    │    └── [Si falló todo] → Generar alerta con diagnóstico
-  │
-  └── guardar_en_bd() → Inserta horarios y marca asignaciones como 'asignado'
+  └── Para cada asignación:
+       ├── Leer hora_inicio / hora_fin fijos de la asignación
+       ├── slot_inicio = _hora_a_slot(hora_inicio)
+       ├── duracion = _hora_a_slot(hora_fin) - slot_inicio
+       │
+       ├── _dias_disponibles_para_horario(asignacion)
+       │   → Filtra profesor_disponibilidad buscando días donde
+       │     [hora_inicio, hora_fin] quepa dentro del rango del profesor
+       │
+       ├── _salones_compatibles(tipo_materia, es_mediacion)
+       │   → Si es Mediacion Tecnologica: solo MEDIACION_TECNOLOGICA_*
+       │   → Si es Laboratorio: Laboratorio + Normal
+       │   → Si es Tecnológica: solo Tecnológica
+       │   → Si es Auditorio: solo Auditorio
+       │   → Si es Normal: cualquier salón (excepto MEDIACION_TECNOLOGICA)
+       │
+       ├── [SALÓN PREFERIDO (optimización)]:
+       │   Si el par (profesor_id, materia_id) ya tiene un salón asignado
+       │   de otro grupo, intentar usar ESE MISMO SALÓN primero
+       │   (caché: salon_por_materia_profesor)
+       │
+       ├── [FALLBACK]:
+       │   Si el salón preferido no sirve (ocupado), probar
+       │   cada salón compatible por orden de uso (menos usado primero)
+       │
+       └── [Si falló todo]:
+           → Registrar en el caché el primer salón que funcionó
+           → [Si falló en todos] Generar alerta con diagnóstico
+
+  guardar_en_bd() → Inserta horarios y marca asignaciones como 'asignado'
 ```
 
-#### 6.8.4 Estrategias de distribución
+#### 6.9.5 Optimización: mismo salón para misma materia-profesor
 
-Para materias de 4h (8 bloques):
+El diccionario `salon_por_materia_profesor[(profesor_id, materia_id)] = salon_id`
+se usa para que **un maestro que da la misma materia en varios grupos distintos
+reciba el mismo salón para todas**, evitando que tenga que moverse por la
+universidad entre clases.
 
-```python
-[("Lunes", 4), ("Miércoles", 4)]   # 2h Lunes + 2h Miércoles
-[("Martes", 4), ("Jueves", 4)]     # 2h Martes + 2h Jueves
-... # y otras 17 combinaciones más
-```
+1. Cuando se asigna exitosamente un salón, se guarda en el caché
+2. Para la siguiente asignación del mismo par (profesor, materia), se intenta
+   ese salón primero
+3. Si está ocupado en alguno de los días/horarios, se prueba con otros salones
+   y el caché se actualiza
 
-Para materias de 3h (6 bloques):
-```python
-[("Lunes", 4), ("Miércoles", 2)]   # 2h Lunes + 1h Miércoles
-[("Lunes", 2), ("Miércoles", 4)]
-...
-```
+#### 6.9.6 Diagnóstico de fallos
 
-#### 6.8.5 Regla de separación para clases en línea
-
-Cuando un profesor tiene versión presencial (ID base) y online (ID + "-L"):
-La clase online debe empezar **2.5 horas después** (5 slots) de la última clase
-presencial del mismo profesor en ese día.
-
-```python
-if es_en_linea:
-    base_prof_id = prof_id.replace('-L', '')
-    max_slot_presencial = último slot presencial del día
-    if slot_inicio < (max_slot_presencial + 5):
-        return False  # No se puede asignar aquí
-```
-
-#### 6.8.6 Evaluación de slots (`_evaluar_slot`)
-
-Asigna un puntaje a cada slot candidato:
-
-| Condición                          | Puntaje |
-|------------------------------------|---------|
-| Grupo sin clases previas ese día   | 100 - slot_inicio |
-| Slot adyacente a clase existente   | 200 (óptimo, evita huecos) |
-| Slot contiguo a clase existente    | 150 |
-| Slot lejano de otras clases        | -(distancia * 50) |
-
-Se elige el slot con mayor puntaje.
-
-#### 6.8.7 Diagnóstico de fallos
-
-Cuando una asignación no se puede realizar, se genera un mensaje con:
-- Causas identificadas (sobrecarga, falta de salones, disponibilidad insuficiente)
+Cuando una asignación no se puede realizar, se genera una alerta con:
+- Causas identificadas (falta de salones compatibles, disponibilidad insuficiente)
 - Sugerencias de solución
-- Debug en consola con los periodos reales del profesor y slots ocupados
+- Detalle de días disponibles y salones compatibles con espacio libre
 
 ---
 
-### 6.9 `src/clases/memoria_Horario_Grafico.py` — Tensor de horarios para visualización
+### 6.10 `src/clases/memoria_Horario_Grafico.py` — Tensor de horarios para visualización
 
 **Clase:** `MemoriaHorarioGrafico` (singleton via instancia global)
 
@@ -384,23 +385,30 @@ Donde:
 | Profesor  | `Materia\nSalón: X\nGrupo: Y`     |
 | Grupo     | `Materia\nProfesor\nSalón: X`     |
 
+**Cambios no documentados:**
+
+- Los grupos se cargan dinámicamente desde BD mediante `_cargar_grupos_desde_bd()` (ya no hay diccionario fijo).
+- **Modo Auditorio**: si la materia tiene tipo `Auditorio`, el horario asignado a un grupo se replica visualmente a todos los grupos del mismo semestre en el tensor.
+
 ---
 
-### 6.10 `src/UI/ventana_principal.py` — Interfaz de Personal
+### 6.11 `src/UI/ventana_principal.py` — Interfaz de Personal
 
 **Clase:** `VentanaPrincipal`
 
 #### Pestaña Personal (tab_personal)
 
 Panel izquierdo (con scroll):
-- **Sección Profesores**: campos No. Cuenta, Nombre(s), Apellidos, combo En línea, periodos de disponibilidad, botones Guardar/Eliminar/Limpiar
-- **Sección Materias**: campos Clave, Nombre, Horas Semana, Semestre, Prioridad
-- **Sección Salones**: campos Número de aula, Capacidad, Tipo
+- **Sección Profesores**: campos No. Cuenta, Nombre(s), Apellidos, periodos de disponibilidad, botones Guardar/Eliminar/Limpiar
+- **Sección Materias**: campos Clave, Nombre, Horas Semana, Semestre, Prioridad/Preferencia (Normal, Tecnológica, Laboratorio, Auditorio), botones Agregar/Eliminar
+- **Sección Salones**: campos Número de aula, Capacidad, Tipo (Normal, Tecnológica, Laboratorio, Auditorio), botones Agregar/Eliminar
+- **Sección Grupos**: campos Grupo (ID), Semestre (nivel), botones Agregar/Eliminar
 
 Panel derecho:
-- Tabla de profesores registrados con búsqueda
+- Tabla de profesores registrados con búsqueda por texto
 - Tabla de materias registradas con búsqueda y filtro por semestre
-- Tabla de salones registrados
+- Tabla de salones registrados (filtra automáticamente salones MEDIACION_TECNOLOGICA)
+- Tabla de grupos registrados con búsqueda y filtro por semestre
 
 #### Periodos UI
 
@@ -420,31 +428,76 @@ usando como referencia 1920x1080.
 | Método                          | Propósito                                    |
 |---------------------------------|----------------------------------------------|
 | `evento_boton_profesores()`     | Guarda/actualiza profesor + disponibilidad   |
-| `evento_materias()`             | Guarda materia                               |
+| `evento_materias()`             | Guarda materia con tipo                      |
 | `evento_Salones()`              | Guarda salón                                 |
+| `evento_grupos()`               | Guarda grupo con nivel (semestre)            |
+| `eliminar_profesor()`           | Elimina profesor + disponibilidad + asignaciones |
+| `eliminar_materia()`            | Elimina materia + asignaciones               |
+| `eliminar_salon()`              | Elimina salón + horarios                     |
+| `eliminar_grupo()`              | Elimina grupo + asignaciones + horarios      |
 | `cargar_profesor_seleccionado()`| Carga datos del profesor al hacer clic en tabla|
-| `cargar_materia_seleccionada()` | Carga datos de la materia                    |
+| `cargar_materia_seleccionada()` | Carga datos de la materia (incluye tipo)     |
 | `cargar_salon_seleccionado()`   | Carga datos del salón                        |
+| `cargar_grupo_seleccionado()`   | Carga datos del grupo                        |
 | `mostrar_datos_profesor()`      | Refresca la tabla de profesores              |
 | `mostrar_datos_materias()`      | Refresca la tabla de materias                |
-| `mostrar_datos_salones()`       | Refresca la tabla de salones                 |
+| `mostrar_datos_salones()`       | Refresca la tabla de salones (filtra MEDIACION_TECNOLOGICA) |
+| `mostrar_datos_grupos()`        | Refresca la tabla de grupos                  |
+| `filtrar_profesores()`          | Filtra tabla de profesores por texto         |
+| `filtrar_materias()`            | Filtra materias por texto + semestre         |
+| `filtrar_grupos()`              | Filtra grupos por texto + semestre           |
 
 ---
 
-### 6.11 `src/UI/ventana_gestion.py` — Interfaz de Gestión y Horarios
+### 6.12 `src/UI/ventana_gestion.py` — Interfaz de Gestión y Horarios
 
 **Clase:** `VentanaGestion`
 
 #### Pestaña Gestionar (pes0)
 
-Panel izquierdo: combos para seleccionar Periodo, Profesor, Materia, Grupo, Semestre,
-y botones de acción (Asignación Manual, Automática, Liberar, Borrar Todo).
+**Filtros superiores:** Periodo (A / B) y Semestre.
 
-Panel derecho:
-- Filtro por estado (Todos / pendiente / asignado)
-- Barra de búsqueda por texto (filtra por nombre de profesor o materia)
-- Tabla de asignaciones con scroll horizontal y vertical
-- Al seleccionar una fila, carga los datos en los combos del panel izquierdo
+**Panel izquierdo — Asignación por Periodos:**
+- Campos de profesor (No. Cuenta, Nombre) — solo lectura al cargar desde la tabla derecha.
+- Botón "Limpiar" para deseleccionar profesor.
+- Etiqueta de resumen de horas (asignadas / disponibles / restantes) con cambio de color si hay sobrecarga.
+- Tarjetas dinámicas de periodo, cada una contiene:
+  - Horario editable (hora_inicio / hora_fin).
+  - Combo de **Modalidad** (Presencial / Mediacion Tecnologica).
+  - Etiqueta de horas restantes (se actualiza al seleccionar materia).
+  - Filas de Materia + Grupo con botón "+ Agregar Materia" (múltiples filas por periodo).
+  - Checkboxes de días (Lunes a Sábado).
+  - Etiqueta de alerta (confirmación/error al guardar).
+  - Botón "Guardar Asignaciones" — persiste disponibilidad, modalidad y asignación.
+  - Botón "Quitar Periodo".
+  - Separador visual debajo del botón guardar.
+- Botón "+ Agregar Periodo" para periodos adicionales.
+
+**Panel derecho — Profesores:**
+- Tabla seleccionable con No. Cuenta, Nombre y Disponibilidad resumida.
+- Búsqueda por texto sobre la tabla (filtro dinámico).
+- Al hacer clic, carga los datos en el panel izquierdo.
+- Al cargar, se limpian los periodos dummy (07:00-07:30) que el Personal anterior pudiera haber creado.
+
+**Vista Previa de Asignaciones:**
+- Filtro por estado (Todos / pendiente / asignado).
+- Barra de búsqueda por texto (filtra por profesor o materia).
+- Tabla con todas las asignaciones (LEFT JOIN con profesores, materias y grupos), ordenadas por ID.
+- Botón "Limpiar" para resetear filtros.
+
+**Acciones:**
+- Botón "Liberar": libera la asignación seleccionada (borra horarios, vuelve a pendiente).
+- Botón "Borrar Todas": elimina todas las asignaciones y horarios, resetea AUTO_INCREMENT.
+
+#### Pestaña Alertas (pes_alertas)
+
+Tercera pestaña que muestra **todas** las alertas generadas durante la asignación automática:
+
+- **Tabla superior** con columnas: Materia, Grupo, Profesor, Causa.
+- **Panel de detalle inferior** (Text widget) con: causas, sugerencias y detalles técnicos (horas requeridas, disponibilidad, slots ocupados, salones compatibles).
+- Al seleccionar una alerta en la tabla, se muestra el detalle completo.
+- Botón "Limpiar Alertas".
+- Al finalizar una asignación automática con conflictos, el messagebox redirige a esta pestaña.
 
 #### Pestaña Ver Horarios (pes1)
 
@@ -460,17 +513,27 @@ Visualización gráfica con matplotlib:
 
 | Método                          | Propósito                                    |
 |---------------------------------|----------------------------------------------|
-| `asignar_profesor_materia()`    | Crea/modifica una asignación manual          |
-| `iniciar_asignacion_automatica()`| Ejecuta GeneradorHorarios en un hilo        |
+| `iniciar_asignacion_automatica()`| Ejecuta GeneradorHorarios en un hilo (con `separacion_online_activa=False`) |
 | `borrar_asignacion_seleccionada()`| Elimina asignación y libera horario       |
-| `formatear_asignaciones()`      | Borra TODAS las asignaciones y horarios      |
-| `actualizar_vista_previa()`     | Refresca la tabla de asignaciones con filtros|
-| `cargar_combos_bd()`            | Pobla los combos desde la BD                 |
-| `cargar_grupos_por_semestre()`  | Filtra grupos disponibles por semestre       |
+| `formatear_asignaciones()`      | Borra TODAS las asignaciones y horarios (resetea AUTO_INCREMENT) |
+| `actualizar_vista_previa()`     | Refresca la tabla de asignaciones con filtros (LEFT JOIN grupos) |
 | `actualizar_tabla_grafica()`    | Dibuja el horario en matplotlib              |
-| `exportar_pdf_completo()`       | Genera PDF de todos los horarios             |
+| `exportar_pdf_completo()`       | Genera PDF de todos los horarios (blanco y negro) |
 | `guardar_captura()`             | Guarda PNG del horario actual                |
-| `exportar_excel()`              | Genera Excel multi-hoja                      |
+| `exportar_excel()`              | Genera Excel multi-hoja con pandas+openpyxl  |
+| `_agregar_periodo_asignacion(datos)` | Construye tarjeta de periodo (horario, modalidad, días, materia/grupo) |
+| `_cargar_periodos_desde_bd()`   | Carga periodos+asignaciones desde BD (optimizado: 1 conexión, 3 queries) |
+| `_guardar_disponibilidad_periodo()` | Guarda disponibilidad con modalidad       |
+| `_asignar_periodo()`            | Inserta/modifica/sustituye asignación con periodo, hora_i, hora_f, modalidad |
+| `_calcular_horas_profesor()`    | Suma horas disponibles vs asignadas           |
+| `_calcular_horas_con_ui()`      | Calcula horas considerando cambios UI        |
+| `_materias_filtradas_actual()`  | Filtra materias por Periodo+Semestre         |
+| `_poblar_tabla_profesores()`    | Pobla la tabla seleccionable de profesores   |
+| `_filtrar_tabla_profesores()`   | Filtra dinámicamente la tabla de profesores  |
+| `obtener_o_crear_grupo()`       | Busca o crea grupo en BD automáticamente     |
+| `_construir_pestana_alertas()`  | Construye la interfaz de la pestaña Alertas  |
+| `_mostrar_alertas_en_tabla()`   | Puebla la tabla de alertas con resultados    |
+| `_mostrar_detalle_alerta()`     | Muestra detalle completo de la alerta seleccionada |
 
 #### Grupos por semestre
 
@@ -485,43 +548,61 @@ El método `_cargar_grupos_desde_bd()` determina el semestre de cada grupo:
 
 ```
 1. [Personal] Registrar profesor con disponibilidad (días y horarios)
-2. [Personal] Registrar materia con horas y tipo
+2. [Personal] Registrar materia con horas, tipo y preferencia
 3. [Personal] Registrar salón con tipo
-4. [Gestión]  Crear asignación: seleccionar profesor + materia + grupo
-5. [Gestión]  Ejecutar asignación automática:
+4. [Personal] Registrar grupos con nivel (semestre)
+5. [Gestión]  Seleccionar Periodo (A o B) y Semestre en filtros superiores
+6. [Gestión]  Seleccionar profesor en la tabla derecha
+              → Se cargan sus periodos de disponibilidad + asignaciones en el panel izquierdo
+7. [Gestión]  En cada tarjeta de periodo:
+              a. Ajustar horario inicio/fin
+              b. Elegir Modalidad (Presencial / Mediacion Tecnologica)
+              c. Marcar días disponibles
+              d. Elegir Materia + Grupo (múltiples filas por periodo)
+              e. Click "Guardar Asignaciones"
+              → Persiste disponibilidad con modalidad y crea asignación con estado 'pendiente'
+8. [Gestión]  Ejecutar asignación automática:
               a. Motor calcula slots disponibles
               b. Busca mejor combinación de días/horarios/salones
-              c. Guarda en tabla horarios
-              d. Marca asignación como 'asignado'
-              e. Reporta conflictos si los hay
-6. [Ver Horarios] Visualizar horarios generados
+              c. Usa salones MEDIACION_TECNOLOGICA para modalidad en línea
+              d. Guarda en tabla horarios
+              e. Marca asignación como 'asignado'
+              f. Reporta conflictos en pestaña Alertas (detalle completo)
+9. [Ver Horarios] Visualizar horarios generados (Salón / Profesor / Grupo)
+10.[Ver Horarios] Exportar a PDF, PNG o Excel
 ```
 
 ---
 
 ## 8. REGLAS DE NEGOCIO IMPORTANTES
 
-### 8.1 Profesores en línea
-- Se crean con ID base + "-L" (ej. "P003-L")
-- Deben usar salones con ID que empiece por "EN_LINEA"
-- Deben respetar separación de 2.5h después de clases presenciales del mismo profesor base
-- (No hay restricción de horario matutino/vespertino fijo)
+### 8.1 Profesores en línea / Mediación Tecnológica
+- Ya no se usa el sufijo "-L" ni el campo `en_linea`.
+- La modalidad "Mediacion Tecnologica" se asigna por periodo (en cada tarjeta).
+- Deben usar salones cuyo ID empiece por "MEDIACION_TECNOLOGICA" (se auto-crean si hacen falta).
+- Deben respetar separación de 2.5h después de clases presenciales del mismo profesor (regla desactivada por defecto).
+- El profesor se identifica por `no_cuenta` (ya no se genera con sufijos).
 
 ### 8.2 Materias
 - Tipo "Laboratorio": requiere salón tipo Laboratorio (teoría en Normal, práctica en Lab)
 - Tipo "Tecnológica": requiere salón tipo Tecnológica
 - Tipo "Normal": puede usar cualquier salón
+- Tipo "Auditorio": requiere exclusivamente salón tipo Auditorio
 
 ### 8.3 Asignaciones
-- Una misma combinación profesor-materia-grupo no puede duplicarse
-- Cada asignación puede tener estado "pendiente" o "asignado"
+- Una misma combinación profesor-materia-grupo-modalidad no puede duplicarse
+- Cada asignación tiene: `periodo` (A/B), `modalidad` (Presencial/Mediacion Tecnologica), `hora_inicio`, `hora_fin`, `estado` (pendiente/asignado)
+- Las asignaciones se crean desde tarjetas de periodo que también persisten la disponibilidad horaria en `profesor_disponibilidad`
+- Si la misma materia+grupo ya está asignada a otro profesor, se pregunta si desea sustituirlo
 - Al liberar una asignación se borran sus horarios y vuelve a "pendiente"
-- Al resetear se borran todas las asignaciones y horarios
+- Al resetear se borran todas las asignaciones y horarios (resetea AUTO_INCREMENT)
 
 ### 8.4 Grupos
-- El semestre se deduce del grupo mediante regex `S(\d)` o por lookup en fallback
-- Los grupos se comparten entre presencial y online
-- Los grupos se listan en el combo según el semestre seleccionado y la materia
+- Los grupos se almacenan en tabla `grupos` con `(grupo_id, nivel)` — se eliminó la columna `nombre`
+- El `nivel` se usa para filtrar y asociar grupos a semestres
+- Los grupos se gestionan desde la pestaña Personal (formulario + tabla + filtro por semestre + botón Eliminar)
+- En la pestaña Gestión, los grupos se seleccionan dentro de cada tarjeta de periodo mediante combos
+- Si un grupo no existe en BD al guardar asignación, se crea automáticamente (`obtener_o_crear_grupo()`)
 
 ---
 
@@ -538,7 +619,8 @@ El método `_cargar_grupos_desde_bd()` determina el semestre de cada grupo:
 
 ### Excel
 - Exporta todos los horarios como hojas individuales en un archivo .xlsx
-- Cada entidad (salón/profesor/grupo) es una hoja
+- Cada entidad (salón/profesor/grupo) es una hoja (nombre recortado a 31 caracteres)
+- Auto-ajusta el ancho de columnas (máximo 40)
 - Requiere pandas y openpyxl
 
 ---
@@ -700,3 +782,212 @@ la regla que obliga a que una clase en línea comience 2.5h después de la
 - Activado (default): se aplica la regla de separación (comportamiento original).
 - Desactivado: las clases en línea pueden asignarse en cualquier slot dentro
   de la disponibilidad del profesor, sin importar sus clases presenciales.
+
+---
+
+### 11.9 Auto-generación de profesor_id (P0001…) y nuevo campo no_cuenta (2026-06-22)
+
+**Archivos:** `src/clases/validacion_bd.py`, `src/clases/profesor.py`, `src/UI/ventana_principal.py`
+
+- `profesor_id` ahora se auto-genera como `P0001`, `P0002`… (VARCHAR, mediante `MAX(SUBSTRING) + 1`).
+- Se eliminó la lógica de `en_linea` del modelo y editor de profesores.
+- Se agregó el campo `no_cuenta` como identificador proporcionado por el usuario.
+- Los títulos (DR., MTRO., ING., LIC., etc.) se separan automáticamente del nombre al guardar.
+
+### 11.10 Nuevo modelo de grupos (grupo_id + nivel) (2026-06-22)
+
+**Archivos:** `src/clases/grupo.py`, `src/UI/ventana_principal.py`, `src/UI/ventana_gestion.py`, `src/clases/memoria_Horario_Grafico.py`, `migrar_grupos.sql`
+
+- Nueva tabla `grupos` con columnas `(grupo_id, nivel)`; se eliminó la columna `nombre`.
+- Migración `migrar_grupos.sql` para agregar `nivel` a la tabla existente.
+- La pestaña Personal ahora tiene una sección de Grupos con formulario + tabla + filtro por semestre.
+- `ventana_gestion.py` lee `nivel` desde la BD y actualizó `obtener_o_crear_grupo`.
+- `memoria_Horario_Grafico.py` carga `GRUPOS_POR_SEMESTRE` desde BD en lugar de un diccionario fijo.
+
+### 11.11 Rediseño completo de la pestaña Gestionar (2026-06-22)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+**Filtros superiores:** Solo Periodo (A / B) y Semestre; se eliminó el combo de Grupo.
+
+**Panel izquierdo — Asignación por Periodos:**
+- Campos de profesor (No. Cuenta, Nombre) en modo solo lectura al cargar desde la tabla.
+- Etiqueta de resumen de horas (asignadas / disponibles / restantes).
+- Tarjetas dinámicas de periodo, cada una contiene:
+  - Horario editable (hora_inicio / hora_fin).
+  - Checkboxes de días (Lunes a Sábado).
+  - Filas de Materia + Grupo con botón "+ Agregar Materia".
+  - Botón "Guardar Asignaciones" que persiste disponibilidad y asignaciones.
+  - Separador visual debajo del botón guardar.
+- Botón "+ Agregar Periodo" para añadir periodos vacíos.
+
+**Panel derecho — Tabla de Profesores seleccionable:**
+- Búsqueda por texto sobre la tabla.
+- Al hacer clic en un profesor, se cargan sus datos en el panel izquierdo.
+- Columna de disponibilidad resumida.
+
+**Tabla de Vista Previa:**
+- Filtro por estado (Todos / pendiente / asignado).
+- Búsqueda por texto (filtra por nombre de profesor o materia).
+- Muestra todas las asignaciones ordenadas por ID.
+
+**Acciones:**
+- Checkbox "Regla 2.5h (online tras presencial)".
+- Botón "Liberar": libera la asignación seleccionada.
+- Botón "Borrar Todas": elimina todas las asignaciones y horarios.
+
+**Métodos nuevos:**
+- `_agregar_periodo_asignacion(datos)` — construye una tarjeta de periodo con horario, días, materia/grupo y guardar.
+- `_cargar_periodos_desde_bd()` — carga periodos desde `profesor_disponibilidad` agrupados por hora_i/hora_f.
+- `_guardar_disponibilidad_periodo()` — guarda/actualiza la disponibilidad del profesor.
+- `_asignar_periodo()` — inserta asignación con periodo y estado 'pendiente'.
+- `_actualizar_horas_info()` / `_calcular_horas_profesor()` — muestra resumen de horas.
+- `_materias_filtradas_actual()` — filtra materias por Periodo y Semestre seleccionados.
+- `_poblar_tabla_profesores()` / `_filtrar_tabla_profesores()` — gestiona la tabla de profesores.
+
+### 11.12 Backup del motor y copia para adaptación (2026-06-22)
+
+**Archivos:** `src/motor_horarios_backup.py`, `src/motor_horarios_nuevo.py`
+
+- Se creó `motor_horarios_backup.py` como copia exacta del original.
+- Se creó `motor_horarios_nuevo.py` como copia para adaptar al nuevo esquema de periodos.
+- El motor original (`motor_horarios.py`) permanece intacto.
+
+### 11.13 Migración columna periodo en asignaciones (2026-06-22)
+
+**Archivos:** `migrar_asignaciones_periodo.sql`
+
+- Agrega columna `periodo VARCHAR(10) NOT NULL DEFAULT 'A'` a la tabla `asignaciones`.
+- El combo de periodo usa valores cortos `"A"` / `"B"` (se corrigió de los anteriores `"A (Septiembre-Octubre)"`, que excedían el límite de 10 caracteres).
+
+### 11.14 Correcciones visuales y de flujo en Gestión (2026-06-22)
+
+- Reorden de elementos en tarjetas de periodo: días → botón guardar → separador.
+- Inicialización de la tabla de vista previa al abrir la pestaña (`self.ventana.after(100, self.actualizar_vista_previa)`).
+- Eliminación de widgets y métodos obsoletos (`combo_profesores`, `combo_materias`, `combo_grupos`, `combo_semestre`, `asignar_profesor_materia`, etc.).
+- Corrección de `ttk.LabelFrame`: quitados parámetros no soportados (`foreground`, `font`).
+- Corrección de closure: `btn_agregar_mat` creado antes que `agregar_fila_asignacion` para evitar error de referencia.
+
+### 11.15 Carga de asignaciones existentes en tarjetas de periodo (2026-06-22)
+
+**Archivos:** `migrar_asignaciones_periodo.sql`, `src/UI/ventana_gestion.py`
+
+- Se agregaron columnas `hora_inicio TIME` y `hora_fin TIME` a la tabla `asignaciones`.
+- `_asignar_periodo()` ahora almacena `hora_i`/`hora_f` al guardar la asignación.
+- `_cargar_periodos_desde_bd()` ahora consulta también las asignaciones del profesor (con `LEFT JOIN materias` para obtener el nombre) y las agrupa por horario.
+- `_agregar_periodo_asignacion()` recibe las asignaciones existentes en `datos['asignaciones']` y pre-puebla los combos de materia/grupo con `agregar_fila_asignacion(mat_inicial, grp_inicial)`.
+- Al seleccionar un profesor, las materias y grupos ya asignados aparecen precargados en cada tarjeta de periodo.
+
+### 11.16 Optimización de rendimiento al cargar profesor (2026-06-22)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+**Problema:** Al seleccionar un profesor se abrían múltiples conexiones DB (~10) con ~15 consultas SQL, causando latencia notable.
+
+**Optimizaciones:**
+- `_nombre_de_materia()` (una consulta DB por asignación) se reemplazó por un `LEFT JOIN materias` en la misma consulta que trae las asignaciones.
+- `_calcular_horas_profesor()` se invocaba una vez por cada tarjeta de periodo; ahora se calcula una sola vez en `_cargar_periodos_desde_bd` y se pasa como `horas_pre` a todas las tarjetas.
+- Las listas `todos_grupos` y `mat_ids` se construían repetidamente dentro de cada tarjeta; ahora se construyen una vez y se pasan como `grupos_pre`/`materias_pre`.
+
+**Resultado:** 1 conexión DB (antes ~10), 3 consultas SQL (antes ~15).
+
+### 11.17 Sección Grupos en Personal + filtros por semestre (2026-06-22)
+
+**Archivos:** `src/UI/ventana_principal.py`, `src/clases/grupo.py`, `arrancar.py`
+
+- Nueva **sección Grupos** en el panel izquierdo de la pestaña Personal con campos Grupo (ID), Semestre y botones Agregar/Eliminar.
+- Nuevo modelo `src/clases/grupo.py` con clase `grupo(grupo_id, nivel)` que inserta o actualiza en BD.
+- Nuevas tablas de datos: Grupos Registrados con búsqueda por texto y filtro por semestre.
+- Filtro por semestre añadido también a la tabla de Materias.
+- Botones "Eliminar" para Profesores, Materias y Salones con eliminación en cascada (borra asignaciones y horarios asociados).
+- `arrancar.py` ahora llama a `app.mostrar_datos_grupos()` para cargar grupos al inicio.
+- Al cargar salones en tabla, se filtran automáticamente los `MEDIACION_TECNOLOGICA` (solo se muestran salones físicos).
+
+### 11.18 Columna modalidad en asignaciones y disponibilidad (2026-06-22)
+
+**Archivos:** `migrar_modalidad_periodo.sql`, `migrar_asignaciones_periodo.sql`, `migrar_grupos.sql`
+
+- `migrar_modalidad_periodo.sql`: Agrega columna `modalidad VARCHAR(30) NOT NULL DEFAULT 'Presencial'` a `profesor_disponibilidad`.
+- `migrar_asignaciones_periodo.sql`: Agrega columna `modalidad VARCHAR(30) NOT NULL DEFAULT 'Presencial'` a `asignaciones` (después de `hora_fin`).
+- `migrar_grupos.sql`: También incluye la adición de `modalidad` a `asignaciones`.
+
+### 11.19 Renombrado EN_LINEA → MEDIACION_TECNOLOGICA (2026-06-22)
+
+**Archivos:** `migrar_salones_mediacion.sql`, `src/motor_horarios.py`, `src/UI/ventana_principal.py`
+
+- Nuevo script `migrar_salones_mediacion.sql` que renombra todos los salones `EN_LINEA_*` a `MEDIACION_TECNOLOGICA_*` y actualiza los horarios existentes.
+- En `motor_horarios.py`: todas las referencias a `EN_LINEA` se cambiaron a `MEDIACION_TECNOLOGICA`.
+- El motor ahora **auto-crea** salones `MEDIACION_TECNOLOGICA_N` si el número de asignaciones en línea excede la cantidad de salones existentes.
+
+### 11.20 Pestaña Alertas con detalle completo (2026-06-22)
+
+**Archivos:** `src/UI/ventana_gestion.py`, `src/motor_horarios.py`
+
+- Nueva tercera pestaña **"Alertas"** en VentanaGestion (después de Gestionar, antes de Ver Horarios).
+- Tabla superior con columnas Materia, Grupo, Profesor, Causa.
+- Panel de texto inferior con detalle completo: causas numeradas, sugerencias y detalles técnicos (horas requeridas, disponibilidad del profesor, slots ocupados, salones compatibles).
+- Al finalizar asignación automática con conflictos, el messagebox muestra resumen y redirige a la pestaña Alertas.
+- Se eliminó el límite de 5 alertas en el messagebox.
+
+### 11.21 Modalidad en tarjetas de periodo y combo en UI (2026-06-22)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+- Cada tarjeta de periodo ahora incluye un combo **Modalidad** con opciones "Presencial" y "Mediacion Tecnologica".
+- `_guardar_disponibilidad_periodo()` guarda la modalidad en `profesor_disponibilidad`.
+- `_asignar_periodo()` guarda la modalidad en `asignaciones`.
+- La modalidad se carga desde BD al editar un profesor.
+- Se eliminó el checkbox "Regla 2.5h (online tras presencial)" del panel de acciones. La regla ahora se controla mediante `separacion_online_activa = False` en `iniciar_asignacion_automatica()`.
+
+### 11.22 Resolución de conflictos al asignar (2026-06-22)
+
+**Archivo:** `src/UI/ventana_gestion.py` — método `_asignar_periodo()`
+
+- Si la misma combinación materia+grupo+modalidad ya existe para el profesor actual: pregunta si desea modificar periodo/horario.
+- Si la misma materia+grupo+periodo+modalidad está asignada a **otro profesor**: pregunta si desea sustituirla (transfiere asignación al nuevo profesor).
+- Si no existe: crea asignación nueva con estado 'pendiente'.
+
+### 11.23 Auto-creación de grupos desde Gestión (2026-06-22)
+
+**Archivo:** `src/UI/ventana_gestion.py` — método `obtener_o_crear_grupo()`
+
+- Al guardar una asignación con un grupo que no existe en BD, se crea automáticamente con el nivel correspondiente (extraído de `materias_map`).
+- Evita que el usuario tenga que registrar grupos manualmente antes de asignar.
+
+### 11.24 Exportación a Excel multi-hoja (2026-06-22)
+
+**Archivo:** `src/UI/ventana_gestion.py` — método `exportar_excel()`
+
+- Nueva función de exportación a Excel que genera un archivo `.xlsx` con una hoja por cada entidad (salón/profesor/grupo).
+- Cada hoja contiene la tabla horaria semanal (Hora, Lunes-Sábado).
+- Los saltos de línea en celdas se reemplazan por " - ".
+- Auto-ajuste de ancho de columnas (máximo 40 caracteres).
+- Requiere `pandas` y `openpyxl`.
+
+### 11.25 Optimización y limpieza en Gestión (2026-06-22)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+- `_cargar_periodos_desde_bd()` ahora limpia automáticamente los periodos dummy `07:00-07:30` que el formulario de Personal podía crear por defecto.
+- Vista previa ahora usa `LEFT JOIN grupos` para mostrar correctamente grupos que no existen en la tabla `grupos`.
+- `cargar_combos_bd()` actualizado con `LEFT JOIN` para manejar datos huérfanos.
+- Cálculo de horas mejorado con `_calcular_horas_con_ui()` que considera cambios en la UI antes de guardar.
+
+### 11.26 Auditorio: visualización multi-grupo (2026-06-22)
+
+**Archivos:** `src/clases/memoria_Horario_Grafico.py`
+
+- Cuando una materia es tipo `Auditorio`, el horario asignado a un grupo se replica visualmente a todos los demás grupos del mismo semestre en el tensor.
+- Los grupos por semestre se cargan dinámicamente desde BD (`_cargar_grupos_desde_bd()`) en lugar del diccionario fijo anterior.
+
+### 11.27 Nuevo motor: solo asigna salones con optimización mismo-salón (2026-06-23)
+
+**Archivos:** `src/motor_horarios_nuevo.py`, `src/UI/ventana_gestion.py`
+
+- Se creó `motor_horarios_nuevo.py` con un algoritmo completamente reescrito.
+- **Cambio fundamental:** el motor ya no genera horarios (días/horas) — esos vienen fijos desde la asignación (`hora_inicio`, `hora_fin`). Solo asigna salones.
+- Para cada asignación, busca en `profesor_disponibilidad` los días donde el rango `[hora_inicio, hora_fin]` quepa dentro de la disponibilidad del profesor.
+- Asigna salones compatibles según tipo de materia y modalidad (Presencial / Mediacion Tecnologica).
+- **Optimización `salon_por_materia_profesor`:** si un profesor da la misma materia en varios grupos, el motor reusa el mismo salón para todos, evitando que el maestro tenga que cambiar de salón entre clases.
+- Se eliminó toda la lógica de estrategias de distribución, batch, simétrico mixto y regla de separación 2.5h.
+- `ventana_gestion.py` cambió su import de `src.motor_horarios` a `src.motor_horarios_nuevo`.
