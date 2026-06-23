@@ -3,6 +3,8 @@ import datetime
 import math
 
 class GeneradorHorarios:
+    MAPA_NUM_A_DIA = {"0": "Lunes", "1": "Martes", "2": "Miércoles", "3": "Jueves", "4": "Viernes", "5": "Sábado", "6": "Domingo"}
+
     def __init__(self, conexion):
         self.conexion = conexion
         self.cursor = self.conexion.cursor(dictionary=True)
@@ -27,6 +29,10 @@ class GeneradorHorarios:
         self.ocupacion_grupos = {}
         self.uso_salones = {salon: 0 for salon in self.salones}
         self.salon_por_materia_profesor = {}
+
+    @staticmethod
+    def _normalizar_dia(dia):
+        return GeneradorHorarios.MAPA_NUM_A_DIA.get(str(dia), str(dia))
 
     def _hora_a_slot(self, hora_time):
         if isinstance(hora_time, datetime.timedelta):
@@ -106,7 +112,7 @@ class GeneradorHorarios:
             if pid not in disp_por_profesor:
                 disp_por_profesor[pid] = []
             disp_por_profesor[pid].append({
-                'dia': f['dia'],
+                'dia': self._normalizar_dia(f['dia']),
                 'hora_inicio': f['hora_inicio'],
                 'hora_fin': f['hora_fin']
             })
@@ -234,23 +240,47 @@ class GeneradorHorarios:
         return sorted(resultado, key=lambda s: self.uso_salones.get(s, 0))
 
     def _asignar_dias_a_salon(self, asignacion, dias_disponibles, salon_id, horarios_generados):
-        slot_ini = asignacion['slot_inicio']
-        duracion = asignacion['slot_duracion']
-        asignados = 0
+        window_start = asignacion['slot_inicio']
+        window_duration = asignacion['slot_duracion']
+        horas_semana = float(asignacion.get('horas_semana', 4))
+        num_dias = len(dias_disponibles)
 
+        if num_dias == 0:
+            return 0
+
+        total_bloques = int(horas_semana * 2)
+
+        session_blocks = window_duration
+        sessions_needed = total_bloques / session_blocks if session_blocks > 0 else 1
+
+        if sessions_needed < 1:
+            session_blocks = max(math.ceil(total_bloques / num_dias), 4)
+            sessions_needed = math.ceil(total_bloques / session_blocks)
+        else:
+            sessions_needed = math.ceil(sessions_needed)
+
+        asignados = 0
+        horarios_creados = 0
         for dd in dias_disponibles:
+            if horarios_creados >= sessions_needed:
+                break
             dia = dd['dia']
-            if self.es_posible_asignar(asignacion, dia, slot_ini, duracion, salon_id):
-                self.registrar_ocupacion(asignacion, dia, slot_ini, duracion, salon_id)
-                horario = {
-                    "asignacion_id": asignacion['asignacion_id'],
-                    "salon_id": salon_id,
-                    "dia": dia,
-                    "hora_inicio": self._slot_a_hora(slot_ini),
-                    "hora_fin": self._slot_a_hora(slot_ini + duracion)
-                }
-                horarios_generados.append(horario)
-                asignados += 1
+            h_ini = window_start
+            while h_ini + session_blocks <= window_start + window_duration and horarios_creados < sessions_needed:
+                if self.es_posible_asignar(asignacion, dia, h_ini, session_blocks, salon_id):
+                    self.registrar_ocupacion(asignacion, dia, h_ini, session_blocks, salon_id)
+                    horarios_generados.append({
+                        "asignacion_id": asignacion['asignacion_id'],
+                        "salon_id": salon_id,
+                        "dia": dia,
+                        "hora_inicio": self._slot_a_hora(h_ini),
+                        "hora_fin": self._slot_a_hora(h_ini + session_blocks)
+                    })
+                    asignados += session_blocks
+                    horarios_creados += 1
+                    h_ini += session_blocks
+                else:
+                    break
 
         return asignados
 
@@ -322,10 +352,6 @@ class GeneradorHorarios:
                         break
 
             if not asignado_completamente:
-                prof_nombre = asignacion.get('profesor_nombre', '?')
-                mat_nombre = asignacion.get('materia_nombre', '?')
-                grupo_id = asignacion.get('grupo_id', '?')
-
                 causas = []
                 sugerencias = []
 

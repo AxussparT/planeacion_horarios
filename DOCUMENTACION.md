@@ -67,7 +67,7 @@ servicio_S/
 │   ├── conexion.py                  # Conexión a MySQL
 │   ├── motor_horarios.py            # Algoritmo original de generación automática
 │   ├── motor_horarios_backup.py     # Backup exacto del motor original
-│   ├── motor_horarios_nuevo.py      # Copia del motor para adaptar a nuevo esquema
+│   ├── motor_horarios_nuevo.py      # Motor actual: asigna salones con distr. por horas_semana
 │   ├── resp_motor.py                # (vacio - reservado)
 │   ├── clases/
 │   │   ├── __init__.py
@@ -250,11 +250,10 @@ class grupo:
 
 **Clase principal:** `GeneradorHorarios`
 
-**Nota:** Este es el nuevo motor que reemplazó al original (`motor_horarios.py` y su
-backup `motor_horarios_backup.py`). La diferencia fundamental es que ya no asigna
-horarios (días ni horas) — esos los define el usuario al crear las asignaciones
-con periodo fijo (`hora_inicio`, `hora_fin`). El motor solo asigna **salones** a
-cada día disponible del profesor.
+**Nota:** Este es el motor activo que reemplazó al original (`motor_horarios.py`).
+El usuario define los horarios (días y horas) al crear asignaciones con periodo fijo
+(`hora_inicio`, `hora_fin`). El motor asigna **salones** y **distribuye las
+sesiones** según `horas_semana` de la materia.
 
 #### 6.9.1 Concepto de SLOT
 
@@ -270,9 +269,19 @@ Slot 29 = 21:30
 
 Conversiones: `_hora_a_slot()` y `_slot_a_hora()`.
 
-#### 6.9.2 Matrices de ocupación
+#### 6.9.2 Normalización de días
 
-Tres diccionarios booleanos:
+Los días en `profesor_disponibilidad` se almacenan como números (`"0"` = Lunes,
+`"1"` = Martes… `"5"` = Sábado). En `cargar_datos()`, `_normalizar_dia()` los
+convierte a nombres en español para usarlos consistentemente en los horarios.
+
+```python
+MAPA_NUM_A_DIA = {"0": "Lunes", "1": "Martes", …, "5": "Sábado", "6": "Domingo"}
+```
+
+#### 6.9.3 Matrices de ocupación
+
+Tres diccionarios booleanos que registran ocupación slot por slot:
 
 | Diccionario                    | Clave                          | Propósito               |
 |-------------------------------|--------------------------------|-------------------------|
@@ -280,18 +289,20 @@ Tres diccionarios booleanos:
 | `ocupacion_profesores[dia,prof,slot]`| (str, str, int) → bool  | Profesor ocupado?       |
 | `ocupacion_grupos[dia,grupo,slot]`  | (str, str, int) → bool  | Grupo ocupado?          |
 
-#### 6.9.3 Auto-creación de salones de mediación
+#### 6.9.4 Auto-creación de salones de mediación
 
 En `cargar_datos()`, el motor cuenta cuántas asignaciones tienen modalidad
 "Mediacion Tecnologica" y auto-crea salones `MEDIACION_TECNOLOGICA_N` si los
 existentes no son suficientes.
 
-#### 6.9.4 Flujo de `ejecutar(modo)`
+#### 6.9.5 Flujo de `ejecutar(modo)`
 
 ```
 ejecutar(modo)
-  ├── cargar_datos(modo)         → Carga asignaciones (con hora_i/hora_f),
-  │                                disponibilidad por profesor, salones
+  ├── cargar_datos(modo)         → Carga asignaciones (con hora_i/hora_f,
+  │                                horas_semana de materia),
+  │                                disponibilidad por profesor (días normalizados),
+  │                                salones (auto-crea MT si faltan)
   ├── _limpiar_matrices()        → Resetea ocupación + uso_salones +
   │                                salon_por_materia_profesor (caché de salón preferido)
   ├── [si modo=parcial] _cargar_horarios_existentes() → Marca horarios previos
@@ -302,20 +313,32 @@ ejecutar(modo)
   │      4. Más horas primero
   │
   └── Para cada asignación:
-       ├── Leer hora_inicio / hora_fin fijos de la asignación
-       ├── slot_inicio = _hora_a_slot(hora_inicio)
-       ├── duracion = _hora_a_slot(hora_fin) - slot_inicio
+       ├── horas_totales = horas_semana de la materia
+       ├── slot_inicio / slot_duracion desde hora_inicio / hora_fin
        │
        ├── _dias_disponibles_para_horario(asignacion)
        │   → Filtra profesor_disponibilidad buscando días donde
        │     [hora_inicio, hora_fin] quepa dentro del rango del profesor
        │
        ├── _salones_compatibles(tipo_materia, es_mediacion)
-       │   → Si es Mediacion Tecnologica: solo MEDIACION_TECNOLOGICA_*
-       │   → Si es Laboratorio: Laboratorio + Normal
-       │   → Si es Tecnológica: solo Tecnológica
-       │   → Si es Auditorio: solo Auditorio
-       │   → Si es Normal: cualquier salón (excepto MEDIACION_TECNOLOGICA)
+       │
+       ├── _asignar_dias_a_salon(asignacion, dias, salon)
+       │   │
+       │   │  total_bloques = horas_semana × 2     (bloques de 30 min por semana)
+       │   │  session_blocks = slot_duracion        (ventana hora_inicio→hora_fin)
+       │   │  sessions_needed = total_bloques / session_blocks
+       │   │
+       │   │  Si sessions_needed < 1:
+       │   │    → La ventana es más grande de lo necesario
+       │   │    → session_blocks = max(ceil(total_bloques / num_dias), 4)
+       │   │    → Así cada sesión dura ~2h y se reparten entre los días
+       │   │
+       │   │  Por cada día disponible (y si caben varias, apiladas):
+       │   │    mientras quepan sesiones en la ventana:
+       │   │      crear horario en ese día
+       │   │      avanzar slot_inicio + session_blocks
+       │   │
+       │   └── Devuelve cantidad de bloques asignados (>0 = éxito)
        │
        ├── [SALÓN PREFERIDO (optimización)]:
        │   Si el par (profesor_id, materia_id) ya tiene un salón asignado
@@ -323,8 +346,8 @@ ejecutar(modo)
        │   (caché: salon_por_materia_profesor)
        │
        ├── [FALLBACK]:
-       │   Si el salón preferido no sirve (ocupado), probar
-       │   cada salón compatible por orden de uso (menos usado primero)
+       │   Si el salón preferido no sirve, probar cada salón compatible
+       │   por orden de uso (menos usado primero)
        │
        └── [Si falló todo]:
            → Registrar en el caché el primer salón que funcionó
@@ -333,7 +356,7 @@ ejecutar(modo)
   guardar_en_bd() → Inserta horarios y marca asignaciones como 'asignado'
 ```
 
-#### 6.9.5 Optimización: mismo salón para misma materia-profesor
+#### 6.9.6 Optimización: mismo salón para misma materia-profesor
 
 El diccionario `salon_por_materia_profesor[(profesor_id, materia_id)] = salon_id`
 se usa para que **un maestro que da la misma materia en varios grupos distintos
@@ -346,7 +369,22 @@ universidad entre clases.
 3. Si está ocupado en alguno de los días/horarios, se prueba con otros salones
    y el caché se actualiza
 
-#### 6.9.6 Diagnóstico de fallos
+#### 6.9.7 Cálculo de sesiones
+
+El motor determina automáticamente cuántas sesiones semanales crear:
+
+| Dato                          | Origen                    | Ejemplo               |
+|-------------------------------|---------------------------|-----------------------|
+| `horas_semana`                | Tabla `materias`          | 4 h/semana            |
+| `slot_duracion`               | `hora_fin − hora_inicio`  | 6h (ventana 7–13)     |
+| `total_bloques`               | `horas_semana × 2`        | 8 bloques             |
+| `num_dias`                    | Disponibilidad profesor   | 2 días (Lun, Mié)     |
+| `session_blocks` (final)      | `total_bloques / num_dias`| 4 bloques = 2h        |
+
+Si `session_blocks` inicial (la ventana) da menos de 1 sesión, se recalcula
+distribuyendo `total_bloques / num_dias`, con un mínimo de 4 bloques (2h).
+
+#### 6.9.8 Diagnóstico de fallos
 
 Cuando una asignación no se puede realizar, se genera una alerta con:
 - Causas identificadas (falta de salones compatibles, disponibilidad insuficiente)
@@ -991,3 +1029,24 @@ la regla que obliga a que una clase en línea comience 2.5h después de la
 - **Optimización `salon_por_materia_profesor`:** si un profesor da la misma materia en varios grupos, el motor reusa el mismo salón para todos, evitando que el maestro tenga que cambiar de salón entre clases.
 - Se eliminó toda la lógica de estrategias de distribución, batch, simétrico mixto y regla de separación 2.5h.
 - `ventana_gestion.py` cambió su import de `src.motor_horarios` a `src.motor_horarios_nuevo`.
+- Se agregó botón "Iniciar Asignaciones de Aula" en la barra de filtros de Gestión.
+
+### 11.28 Correcciones en motor nuevo: normalización de días y distribución por horas_semana (2026-06-23)
+
+**Archivos:** `src/motor_horarios_nuevo.py`
+
+- **Normalización de días:** Se agregó `MAPA_NUM_A_DIA` y `_normalizar_dia()` para
+  convertir los días numéricos (`"0"`–`"5"`) almacenados en `profesor_disponibilidad`
+  a nombres en español (`"Lunes"`–`"Sábado"`) al cargar los datos. Esto corrigió que
+  el motor asignara horarios en días incorrectos.
+- **Distribución por `horas_semana`:** Se reescribió `_asignar_dias_a_salon()` para
+  que calcule el número de sesiones semanales a partir de `horas_semana` de la materia:
+  - `total_bloques = horas_semana × 2` (bloques de 30 min)
+  - Si la ventana `hora_fin − hora_inicio` es mayor de lo necesario, recalcula
+    la duración de cada sesión distribuyendo equitativamente entre los días
+    disponibles (`session_blocks = max(ceil(total_bloques / num_dias), 4)`)
+  - Cada sesión se coloca al inicio de la ventana (`hora_inicio`) y dura
+    `session_blocks` bloques
+- **Múltiples sesiones por día:** Si hay más sesiones necesarias que días
+  disponibles, se apilan varias sesiones consecutivas en el mismo día (avanzando
+  `slot_inicio + session_blocks` por cada una).

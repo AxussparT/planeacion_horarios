@@ -184,9 +184,33 @@ class VentanaGestion:
         frame_contenedor = ttk.Frame(self.pes0, style='blue.TFrame')
         frame_contenedor.pack(fill='both', expand=True, pady=5)
 
-        # ===== LADO IZQUIERDO: Asignaciones por Periodo =====
-        self.frame_izq = ttk.Frame(frame_contenedor, style='blue.TFrame')
-        self.frame_izq.pack(side='left', fill='both', expand=True, padx=(10, 5), anchor='n')
+        # ===== LADO IZQUIERDO: Asignaciones por Periodo (con scroll) =====
+        self.canvas_izq = tk.Canvas(frame_contenedor, highlightthickness=0, background='#0A0F1E')
+        self.sb_izq = ttk.Scrollbar(frame_contenedor, orient='vertical', command=self.canvas_izq.yview)
+        self.frame_izq = ttk.Frame(self.canvas_izq, style='blue.TFrame')
+
+        self.frame_izq.bind(
+            '<Configure>', lambda e: self.canvas_izq.configure(scrollregion=self.canvas_izq.bbox('all'))
+        )
+        self._canvas_izq_window = self.canvas_izq.create_window((0, 0), window=self.frame_izq, anchor='nw')
+
+        def ajustar_ancho_izq(event):
+            self.canvas_izq.itemconfig(self._canvas_izq_window, width=event.width)
+        self.canvas_izq.bind('<Configure>', ajustar_ancho_izq)
+
+        def _on_mousewheel_izq(event):
+            self.canvas_izq.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+        def _on_mousewheel_izq_linux(event):
+            self.canvas_izq.yview_scroll(-1 if event.num == 4 else 1, 'units')
+
+        self.canvas_izq.bind('<MouseWheel>', _on_mousewheel_izq)
+        self.canvas_izq.bind('<Button-4>', _on_mousewheel_izq_linux)
+        self.canvas_izq.bind('<Button-5>', _on_mousewheel_izq_linux)
+        self.canvas_izq.bind('<Enter>', lambda e: self.canvas_izq.focus_set())
+
+        self.canvas_izq.configure(yscrollcommand=self.sb_izq.set)
+        self.canvas_izq.pack(side='left', fill='both', expand=True, padx=(10, 5))
+        self.sb_izq.pack(side='left', fill='y')
 
         # --- Profesor info (read-only when loaded) ---
         f_prof_info = ttk.LabelFrame(self.frame_izq, text="Profesor", style='blue.TFrame')
@@ -299,6 +323,23 @@ class VentanaGestion:
         entry_busqueda = ttk.Entry(f_busqueda, textvariable=self.sv_busqueda_asignaciones, font=self._fuente_label)
         entry_busqueda.pack(side='left', fill='x', expand=True, padx=(0, 5))
 
+        # --- Filtros de semestre y grupo ---
+        f_filtros_vp = ttk.Frame(self.frame_der, style='blue.TFrame')
+        f_filtros_vp.pack(fill='x', pady=(2, 2))
+        ttk.Label(f_filtros_vp, text="Semestre:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(5, 2))
+        self._sv_filtro_semestre_vp = tk.StringVar()
+        self._sv_filtro_semestre_vp.trace_add("write", lambda *a: self._on_filtro_semestre_vp())
+        self.combo_filtro_semestre_vp = ttk.Combobox(f_filtros_vp, textvariable=self._sv_filtro_semestre_vp, state="readonly", width=12, font=self._fuente_label)
+        self.combo_filtro_semestre_vp.pack(side='left', padx=(0, 10))
+        self.combo_filtro_semestre_vp['values'] = ["Todos"]
+
+        ttk.Label(f_filtros_vp, text="Grupo:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
+        self._sv_filtro_grupo_vp = tk.StringVar()
+        self._sv_filtro_grupo_vp.trace_add("write", lambda *a: self.actualizar_vista_previa())
+        self.combo_filtro_grupo_vp = ttk.Combobox(f_filtros_vp, textvariable=self._sv_filtro_grupo_vp, state="readonly", width=14, font=self._fuente_label)
+        self.combo_filtro_grupo_vp.pack(side='left')
+        self.combo_filtro_grupo_vp['values'] = ["Todos"]
+
         self.frame_tablas = ttk.Frame(self.frame_der, style='blue.TFrame')
         self.frame_tablas.pack(fill='both', expand=True, pady=5)
 
@@ -373,6 +414,21 @@ class VentanaGestion:
     def _cambiar_filtro_semestre(self, event=None):
         self._actualizar_materias_en_periodos()
 
+    def _on_filtro_semestre_vp(self):
+        sel = self._sv_filtro_semestre_vp.get()
+        grupos = ["Todos"]
+        if sel and sel != "Todos" and ' - ' in sel:
+            try:
+                sid = sel.split(' - ')[0].strip()
+                grupos_sem = self.grupos_por_semestre.get(sid, [])
+                if grupos_sem:
+                    grupos.extend(grupos_sem)
+            except (ValueError, IndexError):
+                pass
+        self.combo_filtro_grupo_vp['values'] = grupos
+        self._sv_filtro_grupo_vp.set("Todos")
+        self.actualizar_vista_previa()
+
     def _materias_filtradas_actual(self):
         semestre_txt = self.combo_filtro_semestre.get()
         periodo_txt = self.combo_periodos.get()
@@ -390,11 +446,30 @@ class VentanaGestion:
 
     def _actualizar_materias_en_periodos(self):
         filtradas = self._materias_filtradas_actual()
+        grupos_filtrados = self._grupos_filtrados_actual()
         for pd in self._periodos_asignacion:
             for cm, cg in pd.get("filas_asignacion", []):
                 cm['values'] = filtradas
                 if cm.get() and cm.get() not in filtradas:
                     cm.set('')
+                cg['values'] = grupos_filtrados
+                if cg.get() and cg.get() not in grupos_filtrados:
+                    cg.set('')
+
+    def _grupos_filtrados_actual(self):
+        semestre_txt = self.combo_filtro_semestre.get()
+        if semestre_txt and semestre_txt != "Todos" and ' - ' in semestre_txt:
+            try:
+                sid = semestre_txt.split(' - ')[0].strip()
+                return self.grupos_por_semestre.get(sid, [])
+            except (ValueError, IndexError):
+                pass
+        todos = []
+        for sem in sorted(self.grupos_por_semestre.keys(), key=int):
+            for g in self.grupos_por_semestre[sem]:
+                if g not in todos:
+                    todos.append(g)
+        return todos
 
     MAPA_DIAS = {"0": "Lunes", "1": "Martes", "2": "Miércoles", "3": "Jueves", "4": "Viernes", "5": "Sábado"}
     NOMBRES_DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
@@ -451,11 +526,7 @@ class VentanaGestion:
                 asignadas = float(cur.fetchone()[0])
 
                 # Build shared lists once
-                todos_grupos = []
-                for sem in sorted(self.grupos_por_semestre.keys(), key=int):
-                    for g in self.grupos_por_semestre[sem]:
-                        if g not in todos_grupos:
-                            todos_grupos.append(g)
+                todos_grupos = self._grupos_filtrados_actual()
                 mat_ids = self._materias_filtradas_actual()
 
                 agrupado = {}
@@ -670,11 +741,7 @@ class VentanaGestion:
         if grupos_pre is not None:
             todos_grupos = grupos_pre
         else:
-            todos_grupos = []
-            for sem in sorted(self.grupos_por_semestre.keys(), key=int):
-                for g in self.grupos_por_semestre[sem]:
-                    if g not in todos_grupos:
-                        todos_grupos.append(g)
+            todos_grupos = self._grupos_filtrados_actual() if self._profesor_id_seleccionado else []
         if materias_pre is not None:
             mat_ids = materias_pre
         else:
@@ -686,6 +753,8 @@ class VentanaGestion:
         def agregar_fila_asignacion(mat_inicial=None, grp_inicial=None):
             row = len(filas_asignacion)
             ttk.Label(f_asig, text="Materia:", background='#0A0F1E', foreground='white', font=self._fuente_label).grid(row=row, column=0, sticky='w', padx=2)
+            if mat_inicial and mat_inicial not in mat_ids:
+                mat_ids.append(mat_inicial)
             cm = ttk.Combobox(f_asig, values=mat_ids, width=28, font=self._fuente_label, state='readonly')
             cm.grid(row=row, column=1, padx=4, pady=1)
             cm.bind("<<ComboboxSelected>>", lambda e, c=cm, lb=label_restante: self._actualizar_horas_periodo(c, lb))
@@ -694,9 +763,9 @@ class VentanaGestion:
             cg = ttk.Combobox(f_asig, values=todos_grupos, width=10, font=self._fuente_label, state='normal')
             cg.grid(row=row, column=3, padx=4, pady=1)
 
-            if mat_inicial and mat_inicial in mat_ids:
+            if mat_inicial:
                 cm.set(mat_inicial)
-            if grp_inicial and grp_inicial in todos_grupos:
+            if grp_inicial:
                 cg.set(grp_inicial)
 
             filas_asignacion.append((cm, cg))
@@ -1099,6 +1168,9 @@ class VentanaGestion:
                 self.combo_filtro_semestre['values'] = lista_sem
                 if lista_sem and not self.combo_filtro_semestre.get():
                     self.combo_filtro_semestre.set(lista_sem[0])
+
+                if hasattr(self, 'combo_filtro_semestre_vp'):
+                    self.combo_filtro_semestre_vp['values'] = ["Todos"] + lista_sem
             except mysql.connector.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error BD", f"Error cargando combos: {err}")
@@ -1387,6 +1459,22 @@ class VentanaGestion:
                     sql += " AND (p.nombre LIKE %s OR m.nombre LIKE %s OR a.profesor_id LIKE %s OR a.materia_id LIKE %s)"
                     like = f"%{texto_busqueda}%"
                     params.extend([like, like, like, like])
+
+                if hasattr(self, '_sv_filtro_semestre_vp'):
+                    sem_sel = self._sv_filtro_semestre_vp.get()
+                    if sem_sel and sem_sel != "Todos" and ' - ' in sem_sel:
+                        try:
+                            sid = sem_sel.split(' - ')[0].strip()
+                            sql += " AND m.semestre_id = %s"
+                            params.append(sid)
+                        except (ValueError, IndexError):
+                            pass
+
+                if hasattr(self, '_sv_filtro_grupo_vp'):
+                    grp_sel = self._sv_filtro_grupo_vp.get()
+                    if grp_sel and grp_sel != "Todos":
+                        sql += " AND a.grupo_id = %s"
+                        params.append(grp_sel)
 
                 sql += " ORDER BY a.asignacion_id"
                 cur.execute(sql, params)
