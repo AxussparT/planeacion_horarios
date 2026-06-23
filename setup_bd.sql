@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS asignaciones (
     periodo VARCHAR(10) NOT NULL DEFAULT 'A',
     hora_inicio TIME NULL,
     hora_fin TIME NULL,
+    dias VARCHAR(50) DEFAULT NULL,
     modalidad VARCHAR(30) NOT NULL DEFAULT 'Presencial',
     estado VARCHAR(20) DEFAULT 'pendiente',
     FOREIGN KEY (profesor_id) REFERENCES profesores(profesor_id) ON DELETE CASCADE,

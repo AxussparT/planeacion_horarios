@@ -71,7 +71,8 @@ class GeneradorHorarios:
                    m.nombre as materia_nombre,
                    IFNULL(m.horas_semana, 4) as horas_semana,
                    IFNULL(m.tipo, 'Normal') as tipo_materia,
-                   IFNULL(m.semestre_id, 99) as semestre_id
+                   IFNULL(m.semestre_id, 99) as semestre_id,
+                   a.dias
             FROM asignaciones a
             JOIN profesores p ON a.profesor_id = p.profesor_id
             JOIN materias m ON a.materia_id = m.materia_id
@@ -176,15 +177,23 @@ class GeneradorHorarios:
         duracion = asignacion['slot_duracion']
         slot_fin = slot_ini + duracion
 
+        dias_permitidos = None
+        raw_dias = asignacion.get('dias')
+        if raw_dias:
+            dias_permitidos = {d.strip() for d in raw_dias.split(',')}
+
         dias_validos = []
         for p in asignacion.get('disponibilidad', []):
+            p_dia = p['dia']
+            if dias_permitidos and p_dia not in dias_permitidos:
+                continue
             p_ini = self._hora_a_slot(p['hora_inicio'])
             p_fin = self._hora_a_slot(p['hora_fin'])
             if slot_ini >= p_ini and slot_fin <= p_fin:
-                if dias_validos and p['dia'] in [d['dia'] for d in dias_validos]:
+                if dias_validos and p_dia in [d['dia'] for d in dias_validos]:
                     continue
                 dias_validos.append({
-                    'dia': p['dia'],
+                    'dia': p_dia,
                     'slot_inicio': slot_ini,
                     'slot_fin': slot_fin
                 })

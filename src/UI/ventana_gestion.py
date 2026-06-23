@@ -24,6 +24,19 @@ def ruta_recurso(relative_path):
         base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     return os.path.join(base_path, relative_path)
 
+def _migrar_bd():
+    try:
+        conn = get_conexion()
+        if conn is None:
+            return
+        cur = conn.cursor()
+        cur.execute("ALTER TABLE asignaciones ADD COLUMN dias VARCHAR(50) DEFAULT NULL")
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception:
+        pass
+
 class VentanaGestion:
     def __init__(self, master_window=None, parent_frame=None):
         if parent_frame is not None:
@@ -35,6 +48,8 @@ class VentanaGestion:
             self.ventana.state('zoomed')
             self.ventana.transient(master_window)
             self._is_embedded = False
+
+        _migrar_bd()
 
         estilo = ttk.Style()
         estilo.configure('blue.TFrame', background='#0A0F1E')
@@ -842,7 +857,8 @@ class VentanaGestion:
                         continue
 
                 self._guardar_disponibilidad_periodo(self._profesor_id_seleccionado, hora_i, hora_f, dias_sel, modalidad_var.get(), wd.get('db_hora_i', ''), wd.get('db_hora_f', ''))
-                self._asignar_periodo(self._profesor_id_seleccionado, mat_id, grupo_id, periodo or "A", hora_i, hora_f, modalidad_var.get())
+                dias_str = ", ".join(dias_sel)
+                self._asignar_periodo(self._profesor_id_seleccionado, mat_id, grupo_id, periodo or "A", hora_i, hora_f, modalidad_var.get(), dias_str)
                 alguna_guardada = True
 
             if alguna_guardada:
@@ -1332,7 +1348,7 @@ class VentanaGestion:
                 messagebox.showerror("Error BD", f"Error gestionando grupo: {err}")
                 return None
 
-    def _asignar_periodo(self, profesor_id, materia_id, grupo_id, periodo, hora_i, hora_f, modalidad="Presencial"):
+    def _asignar_periodo(self, profesor_id, materia_id, grupo_id, periodo, hora_i, hora_f, modalidad="Presencial", dias_str=""):
         if not profesor_id or not materia_id or not grupo_id:
             messagebox.showerror("Error", "Complete todos los campos del periodo")
             return False
@@ -1357,8 +1373,8 @@ class VentanaGestion:
                     if messagebox.askyesno("Asignación existente",
                         "Esta asignación ya existe. ¿Desea modificar sus datos (periodo/horario)?"):
                         cur.execute(
-                            "UPDATE asignaciones SET periodo=%s, hora_inicio=%s, hora_fin=%s WHERE asignacion_id=%s",
-                            (periodo, hora_i, hora_f, existente[0])
+                            "UPDATE asignaciones SET periodo=%s, hora_inicio=%s, hora_fin=%s, dias=%s WHERE asignacion_id=%s",
+                            (periodo, hora_i, hora_f, dias_str, existente[0])
                         )
                         conn.commit()
                         messagebox.showinfo("Actualizado", "Asignación actualizada correctamente")
@@ -1378,8 +1394,8 @@ class VentanaGestion:
                         if messagebox.askyesno("Conflicto",
                             f"'{old_nombre}' ya tiene asignada esta materia y grupo en el periodo {periodo} ({modalidad}).\n¿Desea sustituirlo por el profesor actual?"):
                             cur.execute(
-                                "UPDATE asignaciones SET profesor_id=%s, hora_inicio=%s, hora_fin=%s WHERE asignacion_id=%s",
-                                (profesor_id, hora_i, hora_f, old_asig_id)
+                                "UPDATE asignaciones SET profesor_id=%s, hora_inicio=%s, hora_fin=%s, dias=%s WHERE asignacion_id=%s",
+                                (profesor_id, hora_i, hora_f, dias_str, old_asig_id)
                             )
                             conn.commit()
                             messagebox.showinfo("Sustituido", "Asignación transferida al nuevo profesor")
@@ -1389,8 +1405,8 @@ class VentanaGestion:
                             return False
                     else:
                         cur.execute(
-                            "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado, periodo, hora_inicio, hora_fin, modalidad) VALUES (%s, %s, %s, 'pendiente', %s, %s, %s, %s)",
-                            (profesor_id, materia_id, grupo_id, periodo, hora_i, hora_f, modalidad)
+                            "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado, periodo, hora_inicio, hora_fin, dias, modalidad) VALUES (%s, %s, %s, 'pendiente', %s, %s, %s, %s, %s)",
+                            (profesor_id, materia_id, grupo_id, periodo, hora_i, hora_f, dias_str, modalidad)
                         )
                         conn.commit()
                         messagebox.showinfo("Éxito", f"Asignación guardada para el periodo {periodo}")
