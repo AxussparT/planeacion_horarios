@@ -972,8 +972,8 @@ class VentanaGestion:
                 cur, conn = ctx
                 try:
                     cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
-                    cur.execute("UPDATE asignaciones SET estado = 'pendiente' WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
-                    messagebox.showinfo("Éxito", "Asignación liberada correctamente.\nEl espacio del salón queda disponible para nuevas asignaciones.")
+                    cur.execute("DELETE FROM asignaciones WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
+                    messagebox.showinfo("Éxito", "Asignación eliminada correctamente.")
                     self.asignacion_seleccionada_id = None 
                     self.actualizar_vista_previa()
                     self._cargar_tensor_diferido()
@@ -1008,20 +1008,9 @@ class VentanaGestion:
 
     def cargar_asignacion_seleccionada(self, event):
         item = self.tabla_asignaciones.focus()
-        if not item: return
+        if not item or item == "no_results": return
         
-        v = self.tabla_asignaciones.item(item, "values")
-        if len(v) < 4: return
-        
-        self.asignacion_seleccionada_id = v[3] 
-        p_str = v[0] 
-        m_g_str = v[1] 
-        
-        g_str = ""
-        m_str = m_g_str
-        if "(" in m_g_str and m_g_str.endswith(")"):
-            m_str = m_g_str[:m_g_str.rfind("(")].strip()
-            g_str = m_g_str[m_g_str.rfind("(")+1:-1].strip()
+        self.asignacion_seleccionada_id = item
 
     def iniciar_asignacion_automatica(self):
         respuesta = messagebox.askyesnocancel(
@@ -1485,14 +1474,14 @@ class VentanaGestion:
                         asig_id = row[0]
                         p_str = f"{row[1]} - {row[2]}"
                         m_str = f"{row[3]} - {row[4]} ({row[5]})"
-                        estado_str = str(row[6]).upper()
-                        tabla.insert('', 'end', values=(p_str, m_str, estado_str, asig_id))
+                        estado_str = str(row[7]).upper()
+                        tabla.insert('', 'end', iid=str(asig_id), values=(p_str, m_str, estado_str))
                 elif tabla:
-                    tabla.insert('', 'end', values=("(No hay resultados)", "", "", ""))
+                    tabla.insert('', 'end', iid="no_results", values=("(No hay resultados)", "", ""))
 
             except mysql.connector.Error as err:
                 if tabla:
-                    tabla.insert('', 'end', values=(f"Error BD: {err}", "", "", ""))
+                    tabla.insert('', 'end', iid="error_bd", values=(f"Error BD: {err}", "", ""))
 
     # --- VISUALIZACIÓN GRÁFICA ---
     def Construccion_Ver_Horarios(self, contenedor):
