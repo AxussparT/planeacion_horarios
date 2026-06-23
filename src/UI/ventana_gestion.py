@@ -222,9 +222,33 @@ class VentanaGestion:
         self._btn_agregar_periodo = ttk.Button(f_periodos, text="+ Agregar Periodo", command=self._agregar_periodo_vacio)
         self._btn_agregar_periodo.pack(pady=4)
 
-        # ===== Lado derecho: Profesores y Vista Previa =====
-        self.frame_der = ttk.Frame(frame_contenedor, style='blue.TFrame')
-        self.frame_der.pack(side='left', fill='both', expand=True, padx=(5, 10), anchor='n')
+        # ===== Lado derecho: Profesores y Vista Previa (con scroll) =====
+        self.canvas_der = tk.Canvas(frame_contenedor, highlightthickness=0, background='#0A0F1E')
+        self.sb_der = ttk.Scrollbar(frame_contenedor, orient='vertical', command=self.canvas_der.yview)
+        self.frame_der = ttk.Frame(self.canvas_der, style='blue.TFrame')
+
+        self.frame_der.bind(
+            '<Configure>', lambda e: self.canvas_der.configure(scrollregion=self.canvas_der.bbox('all'))
+        )
+        self._canvas_der_window = self.canvas_der.create_window((0, 0), window=self.frame_der, anchor='nw')
+
+        def ajustar_ancho_der(event):
+            self.canvas_der.itemconfig(self._canvas_der_window, width=event.width)
+        self.canvas_der.bind('<Configure>', ajustar_ancho_der)
+
+        def _on_mousewheel(event):
+            self.canvas_der.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+        def _on_mousewheel_linux(event):
+            self.canvas_der.yview_scroll(-1 if event.num == 4 else 1, 'units')
+
+        self.canvas_der.bind('<MouseWheel>', _on_mousewheel)
+        self.canvas_der.bind('<Button-4>', _on_mousewheel_linux)
+        self.canvas_der.bind('<Button-5>', _on_mousewheel_linux)
+        self.canvas_der.bind('<Enter>', lambda e: self.canvas_der.focus_set())
+
+        self.canvas_der.configure(yscrollcommand=self.sb_der.set)
+        self.canvas_der.pack(side='left', fill='both', expand=True, padx=(5, 0))
+        self.sb_der.pack(side='left', fill='y', padx=(0, 10))
 
         # --- Tabla de Profesores (seleccionable) ---
         lbl_prof = ttk.Label(self.frame_der, text="Profesores", background='#0A0F1E', foreground='white', font=self._fuente_sub)
@@ -237,7 +261,10 @@ class VentanaGestion:
         ttk.Entry(f_busca_prof, textvariable=self.sv_busca_prof_tabla, font=self._fuente_label).pack(fill='x')
 
         cols_prof = ('No. Cuenta', 'Profesor', 'Disponibilidad')
-        self.tabla_profesores = ttk.Treeview(self.frame_der, columns=cols_prof, show='headings', height=8)
+        self._frame_tabla_prof = ttk.Frame(self.frame_der, style='blue.TFrame')
+        self._frame_tabla_prof.pack(fill='x', padx=6, pady=2)
+
+        self.tabla_profesores = ttk.Treeview(self._frame_tabla_prof, columns=cols_prof, show='headings', height=8)
         for c in cols_prof:
             self.tabla_profesores.heading(c, text=c)
         self.tabla_profesores.column('No. Cuenta', width=80)
@@ -245,10 +272,10 @@ class VentanaGestion:
         self.tabla_profesores.column('Disponibilidad', width=120)
         self.tabla_profesores.bind("<<TreeviewSelect>>", self._cargar_profesor_desde_tabla)
 
-        sb_prof_v = ttk.Scrollbar(self.frame_der, orient='vertical', command=self.tabla_profesores.yview)
+        sb_prof_v = ttk.Scrollbar(self._frame_tabla_prof, orient='vertical', command=self.tabla_profesores.yview)
         self.tabla_profesores.configure(yscroll=sb_prof_v.set)
         sb_prof_v.pack(side='right', fill='y')
-        self.tabla_profesores.pack(fill='x', padx=6, pady=2)
+        self.tabla_profesores.pack(fill='x')
 
         ttk.Separator(self.frame_der, orient='horizontal').pack(fill='x', pady=6)
 
