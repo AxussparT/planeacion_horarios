@@ -307,6 +307,7 @@ class GeneradorHorarios:
             bkey = (asignacion['profesor_id'], asignacion['materia_id'])
 
             salon_preferido = self.salon_por_materia_profesor.get(bkey)
+            asignado_completamente = False
 
             if salon_preferido and salon_preferido in salones_compatibles:
                 n = self._asignar_dias_a_salon(asignacion, dias_disponibles, salon_preferido, horarios_generados)
