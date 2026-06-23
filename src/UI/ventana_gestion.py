@@ -25,6 +25,7 @@ def ruta_recurso(relative_path):
     return os.path.join(base_path, relative_path)
 
 def _migrar_bd():
+    conn = None
     try:
         conn = get_conexion()
         if conn is None:
@@ -32,10 +33,43 @@ def _migrar_bd():
         cur = conn.cursor()
         cur.execute("ALTER TABLE asignaciones ADD COLUMN dias VARCHAR(50) DEFAULT NULL")
         conn.commit()
-        cur.close()
-        conn.close()
     except Exception:
-        pass
+        conn.rollback() if conn else None
+    finally:
+        if conn and conn.is_connected():
+            conn.close()
+
+def _backfill_dias():
+    conn = None
+    try:
+        conn = get_conexion()
+        if conn is None:
+            return
+        cur = conn.cursor(dictionary=True)
+
+        cur.execute("SELECT asignacion_id, profesor_id, hora_inicio, hora_fin FROM asignaciones WHERE dias IS NULL AND hora_inicio IS NOT NULL AND hora_fin IS NOT NULL")
+        pendientes = cur.fetchall()
+
+        mapa_num_dia = {"0": "Lunes", "1": "Martes", "2": "Miércoles", "3": "Jueves", "4": "Viernes", "5": "Sábado"}
+
+        for a in pendientes:
+            cur.execute(
+                "SELECT DISTINCT dia FROM profesor_disponibilidad WHERE profesor_id=%s AND hora_inicio=%s AND hora_fin=%s",
+                (a['profesor_id'], a['hora_inicio'], a['hora_fin'])
+            )
+            dias_raw = [row['dia'] for row in cur.fetchall()]
+            if dias_raw:
+                dias_str = ", ".join(mapa_num_dia.get(str(d), str(d)) for d in sorted(dias_raw, key=lambda x: int(x) if str(x).isdigit() else 0))
+                cur.execute("UPDATE asignaciones SET dias=%s WHERE asignacion_id=%s", (dias_str, a['asignacion_id']))
+        conn.commit()
+        if pendientes:
+            print(f"[MIGRACIÓN] días asignados a {len(pendientes)} asignaciones existentes")
+    except Exception as e:
+        print(f"[MIGRACIÓN] Error backfill: {e}")
+        conn.rollback() if conn else None
+    finally:
+        if conn and conn.is_connected():
+            conn.close()
 
 class VentanaGestion:
     def __init__(self, master_window=None, parent_frame=None):
@@ -50,6 +84,7 @@ class VentanaGestion:
             self._is_embedded = False
 
         _migrar_bd()
+        _backfill_dias()
 
         estilo = ttk.Style()
         estilo.configure('blue.TFrame', background='#0A0F1E')
