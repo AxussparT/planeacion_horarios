@@ -1,9 +1,14 @@
 import mysql.connector
 import datetime
 import math
+import unicodedata
 
 class GeneradorHorarios:
-    MAPA_NUM_A_DIA = {"0": "Lunes", "1": "Martes", "2": "Miércoles", "3": "Jueves", "4": "Viernes", "5": "Sábado", "6": "Domingo"}
+    @staticmethod
+    def _normalizar_dia(valor):
+        s = unicodedata.normalize('NFKD', str(valor)).encode('ascii', 'ignore').decode('ascii').strip().lower()
+        mapa = {"lunes": "0", "martes": "1", "miercoles": "2", "jueves": "3", "viernes": "4", "sabado": "5", "domingo": "6"}
+        return mapa.get(s, str(valor).strip())
 
     def __init__(self, conexion):
         self.conexion = conexion
@@ -11,7 +16,7 @@ class GeneradorHorarios:
 
         self.HORA_INICIO_CLASES = 7
         self.MINUTOS_BLOQUE = 30
-        self.SLOTS_DIARIOS = 30
+        self.SLOTS_DIARIOS = 32
 
         self.ocupacion_salones = {}
         self.ocupacion_profesores = {}
@@ -29,10 +34,6 @@ class GeneradorHorarios:
         self.ocupacion_grupos = {}
         self.uso_salones = {salon: 0 for salon in self.salones}
         self.salon_por_materia_profesor = {}
-
-    @staticmethod
-    def _normalizar_dia(dia):
-        return GeneradorHorarios.MAPA_NUM_A_DIA.get(str(dia), str(dia))
 
     def _hora_a_slot(self, hora_time):
         if isinstance(hora_time, datetime.timedelta):
@@ -71,8 +72,7 @@ class GeneradorHorarios:
                    m.nombre as materia_nombre,
                    IFNULL(m.horas_semana, 4) as horas_semana,
                    IFNULL(m.tipo, 'Normal') as tipo_materia,
-                   IFNULL(m.semestre_id, 99) as semestre_id,
-                   a.dias
+                   IFNULL(m.semestre_id, 99) as semestre_id
             FROM asignaciones a
             JOIN profesores p ON a.profesor_id = p.profesor_id
             JOIN materias m ON a.materia_id = m.materia_id
@@ -99,6 +99,7 @@ class GeneradorHorarios:
                 print(f"[SKIP] {a.get('materia_nombre','?')} ({a.get('grupo_id','?')}): hora_inicio o hora_fin es NULL")
         print(f"[MOTOR] Total asignaciones: {len(raw_asignaciones)}, procesables: {len(self.asignaciones)}, omitidas: {skipped}")
 
+        print(f"[DEBUG MOTOR] ===== CARGANDO DISPONIBILIDAD =====")
         sql_disp = """
             SELECT profesor_id, dia, hora_inicio, hora_fin
             FROM profesor_disponibilidad
@@ -106,20 +107,28 @@ class GeneradorHorarios:
         """
         self.cursor.execute(sql_disp)
         filas_disp = self.cursor.fetchall()
+        print(f"[DEBUG MOTOR] Total filas disponibilidad: {len(filas_disp)}")
 
         disp_por_profesor = {}
         for f in filas_disp:
             pid = f['profesor_id']
+            raw_dia = str(f['dia'])
+            norm_dia = self._normalizar_dia(raw_dia)
+            if raw_dia != norm_dia:
+                print(f"[DEBUG MOTOR] CONVERSION DIA: raw='{raw_dia}' -> norm='{norm_dia}' (prof {pid})")
             if pid not in disp_por_profesor:
                 disp_por_profesor[pid] = []
             disp_por_profesor[pid].append({
-                'dia': self._normalizar_dia(f['dia']),
+                'dia': norm_dia,
                 'hora_inicio': f['hora_inicio'],
                 'hora_fin': f['hora_fin']
             })
 
         for asig in self.asignaciones:
-            asig['disponibilidad'] = disp_por_profesor.get(asig['profesor_id'], [])
+            disp = disp_por_profesor.get(asig['profesor_id'], [])
+            asig['disponibilidad'] = disp
+            raw_days = set(d['dia'] for d in disp)
+            print(f"[DEBUG MOTOR] Asignacion {asig['materia_nombre']} ({asig['grupo_id']}) -> prof {asig['profesor_id']} -> dias disp: {raw_days}")
 
         self.cursor.execute("SELECT salon_id, tipo FROM salones")
         salones_bd = self.cursor.fetchall()
@@ -177,26 +186,21 @@ class GeneradorHorarios:
         duracion = asignacion['slot_duracion']
         slot_fin = slot_ini + duracion
 
-        dias_permitidos = None
-        raw_dias = asignacion.get('dias')
-        if raw_dias:
-            dias_permitidos = {d.strip() for d in raw_dias.split(',')}
-
         dias_validos = []
         for p in asignacion.get('disponibilidad', []):
-            p_dia = p['dia']
-            if dias_permitidos and p_dia not in dias_permitidos:
-                continue
             p_ini = self._hora_a_slot(p['hora_inicio'])
             p_fin = self._hora_a_slot(p['hora_fin'])
             if slot_ini >= p_ini and slot_fin <= p_fin:
-                if dias_validos and p_dia in [d['dia'] for d in dias_validos]:
+                if dias_validos and p['dia'] in [d['dia'] for d in dias_validos]:
                     continue
                 dias_validos.append({
-                    'dia': p_dia,
+                    'dia': p['dia'],
                     'slot_inicio': slot_ini,
                     'slot_fin': slot_fin
                 })
+        if not dias_validos:
+            print(f"[DEBUG MOTOR] SIN DIAS VALIDOS para {asignacion.get('materia_nombre','?')} ({asignacion.get('grupo_id','?')}) - slot_ini={slot_ini}, duracion={duracion}")
+            print(f"[DEBUG MOTOR]   -> disponibilidad raw: {[{'dia':p['dia'],'hi':str(p['hora_inicio']),'hf':str(p['hora_fin'])} for p in asignacion.get('disponibilidad',[])]}")
         return dias_validos
 
     def es_posible_asignar(self, asignacion, dia, slot_inicio, duracion_bloques, salon_id):
@@ -249,47 +253,23 @@ class GeneradorHorarios:
         return sorted(resultado, key=lambda s: self.uso_salones.get(s, 0))
 
     def _asignar_dias_a_salon(self, asignacion, dias_disponibles, salon_id, horarios_generados):
-        window_start = asignacion['slot_inicio']
-        window_duration = asignacion['slot_duracion']
-        horas_semana = float(asignacion.get('horas_semana', 4))
-        num_dias = len(dias_disponibles)
-
-        if num_dias == 0:
-            return 0
-
-        total_bloques = int(horas_semana * 2)
-
-        session_blocks = window_duration
-        sessions_needed = total_bloques / session_blocks if session_blocks > 0 else 1
-
-        if sessions_needed < 1:
-            session_blocks = max(math.ceil(total_bloques / num_dias), 4)
-            sessions_needed = math.ceil(total_bloques / session_blocks)
-        else:
-            sessions_needed = math.ceil(sessions_needed)
-
+        slot_ini = asignacion['slot_inicio']
+        duracion = asignacion['slot_duracion']
         asignados = 0
-        horarios_creados = 0
+
         for dd in dias_disponibles:
-            if horarios_creados >= sessions_needed:
-                break
             dia = dd['dia']
-            h_ini = window_start
-            while h_ini + session_blocks <= window_start + window_duration and horarios_creados < sessions_needed:
-                if self.es_posible_asignar(asignacion, dia, h_ini, session_blocks, salon_id):
-                    self.registrar_ocupacion(asignacion, dia, h_ini, session_blocks, salon_id)
-                    horarios_generados.append({
-                        "asignacion_id": asignacion['asignacion_id'],
-                        "salon_id": salon_id,
-                        "dia": dia,
-                        "hora_inicio": self._slot_a_hora(h_ini),
-                        "hora_fin": self._slot_a_hora(h_ini + session_blocks)
-                    })
-                    asignados += session_blocks
-                    horarios_creados += 1
-                    h_ini += session_blocks
-                else:
-                    break
+            if self.es_posible_asignar(asignacion, dia, slot_ini, duracion, salon_id):
+                self.registrar_ocupacion(asignacion, dia, slot_ini, duracion, salon_id)
+                horario = {
+                    "asignacion_id": asignacion['asignacion_id'],
+                    "salon_id": salon_id,
+                    "dia": dia,
+                    "hora_inicio": self._slot_a_hora(slot_ini),
+                    "hora_fin": self._slot_a_hora(slot_ini + duracion)
+                }
+                horarios_generados.append(horario)
+                asignados += 1
 
         return asignados
 
@@ -303,6 +283,9 @@ class GeneradorHorarios:
         horarios_generados = []
         alertas_generadas = []
 
+        print(f"[DEBUG MOTOR] ===== INICIANDO ASIGNACION ({modo}) =====")
+        print(f"[DEBUG MOTOR] Total asignaciones a procesar: {len(self.asignaciones)}")
+
         self.asignaciones.sort(
             key=lambda x: (
                 0 if str(x.get('modalidad', 'Presencial')) != 'Mediacion Tecnologica' else 1,
@@ -312,7 +295,8 @@ class GeneradorHorarios:
             )
         )
 
-        for asignacion in self.asignaciones:
+        for idx, asignacion in enumerate(self.asignaciones):
+            print(f"\n[DEBUG MOTOR] --- Procesando {idx+1}/{len(self.asignaciones)}: {asignacion.get('materia_nombre','?')} ({asignacion.get('grupo_id','?')}) ---")
             horas_totales = float(asignacion['horas_semana'])
             tipo_materia = asignacion.get('tipo_materia', 'Normal').lower()
             es_mediacion = str(asignacion.get('modalidad', 'Presencial')) == 'Mediacion Tecnologica'
@@ -324,6 +308,9 @@ class GeneradorHorarios:
 
             dias_disponibles = self._dias_disponibles_para_horario(asignacion)
             salones_compatibles = self._salones_compatibles(tipo_materia, es_mediacion)
+
+            print(f"[DEBUG MOTOR]   Dias disponibles: {[d['dia'] for d in dias_disponibles]}")
+            print(f"[DEBUG MOTOR]   Salones compatibles: {salones_compatibles[:3]}...")
 
             if not dias_disponibles:
                 causas = ["El profesor no tiene disponibilidad en el horario requerido."]
@@ -346,6 +333,7 @@ class GeneradorHorarios:
             bkey = (asignacion['profesor_id'], asignacion['materia_id'])
 
             salon_preferido = self.salon_por_materia_profesor.get(bkey)
+
             asignado_completamente = False
 
             if salon_preferido and salon_preferido in salones_compatibles:
@@ -361,6 +349,10 @@ class GeneradorHorarios:
                         break
 
             if not asignado_completamente:
+                prof_nombre = asignacion.get('profesor_nombre', '?')
+                mat_nombre = asignacion.get('materia_nombre', '?')
+                grupo_id = asignacion.get('grupo_id', '?')
+
                 causas = []
                 sugerencias = []
 
@@ -421,11 +413,12 @@ class GeneradorHorarios:
 
             sql_insert = """INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin)
                      VALUES (%s, %s, %s, %s, %s)"""
-            valores = [(h['asignacion_id'], h['salon_id'], h['dia'], h['hora_inicio'], h['hora_fin'])
-                       for h in lista_horarios]
 
-            if valores:
-                self.cursor.executemany(sql_insert, valores)
+            print(f"[DEBUG GUARDAR] Horarios a insertar: {len(lista_horarios)}")
+            for h in lista_horarios:
+                vals = (h['asignacion_id'], h['salon_id'], h['dia'], h['hora_inicio'], h['hora_fin'])
+                print(f"[DEBUG GUARDAR]   INSERT: asig={vals[0]} salon={vals[1]!r} dia={vals[2]!r} ini={vals[3]!r} fin={vals[4]!r}")
+                self.cursor.execute(sql_insert, vals)
 
             if lista_horarios:
                 ids_asignados = list(set([str(h['asignacion_id']) for h in lista_horarios]))
@@ -434,6 +427,16 @@ class GeneradorHorarios:
                 self.cursor.execute(sql_update, tuple(ids_asignados))
 
             self.conexion.commit()
+
+            # Verify what was stored
+            self.cursor.execute("SELECT horario_id, salon_id, dia, hora_inicio, hora_fin FROM horarios ORDER BY horario_id")
+            rows = self.cursor.fetchall()
+            print(f"[DEBUG GUARDAR] VERIFICACION: {len(rows)} horarios en BD tras commit:")
+            for r in rows:
+                print(f"[DEBUG GUARDAR]   BD: id={r['horario_id']} salon={r['salon_id']!r} dia={r['dia']!r} ini={r['hora_inicio']} fin={r['hora_fin']}")
         except Exception as e:
+            print(f"[DEBUG GUARDAR] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             self.conexion.rollback()
             raise e

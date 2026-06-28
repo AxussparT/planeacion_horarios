@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, font, messagebox
+from tkinter import ttk, font, messagebox, filedialog
 from PIL import Image, ImageTk
 import mysql.connector
 import datetime
@@ -8,6 +8,8 @@ import os
 import sys
 import threading
 import queue
+import json
+import unicodedata
 
 from src.conexion import get_conexion, obtener_cursor, obtener_cursor_dict
 from src.motor_horarios_nuevo import GeneradorHorarios
@@ -162,9 +164,10 @@ class VentanaGestion:
         estilo.configure('Treeview', rowheight=22)
         self._rescale_ui()
 
-    def _cargar_tensor_diferido(self):
-        if self._tensor_cargado:
+    def _cargar_tensor_diferido(self, forzar=False):
+        if self._tensor_cargado and not forzar:
             return
+        self._tensor_cargado = False
         def tarea():
             try:
                 mem_grafico.inicializar_y_llenar_tensor("Salón")
@@ -176,7 +179,7 @@ class VentanaGestion:
 
     def _on_tensor_listo(self):
         self._tensor_cargado = True
-        if hasattr(self, 'combo_vista_horarios') and self.notebook.index(self.notebook.select()) == 1:
+        if hasattr(self, 'combo_vista_horarios'):
             self.cambiar_modo_vista()
 
     def construir_interfaz(self):
@@ -229,6 +232,10 @@ class VentanaGestion:
         ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=15)
         btn_asignar = ttk.Button(frame_filtros, text="Iniciar Asignaciones de Aula", command=self.iniciar_asignacion_automatica)
         btn_asignar.pack(side='left', padx=5)
+        ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=8)
+        ttk.Button(frame_filtros, text="Guardar Config", command=self._guardar_configuracion).pack(side='left', padx=2)
+        ttk.Button(frame_filtros, text="Cargar Config", command=self._cargar_configuracion).pack(side='left', padx=2)
+        self._progress_config = ttk.Progressbar(frame_filtros, mode='determinate', length=120)
 
         # ===== CONTENEDOR PRINCIPAL (izquierda / derecha) =====
         frame_contenedor = ttk.Frame(self.pes0, style='blue.TFrame')
@@ -523,6 +530,12 @@ class VentanaGestion:
 
     MAPA_DIAS = {"0": "Lunes", "1": "Martes", "2": "Miércoles", "3": "Jueves", "4": "Viernes", "5": "Sábado"}
     NOMBRES_DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+    _DIA_SIN_ACENTOS = {"lunes": "0", "martes": "1", "miercoles": "2", "jueves": "3", "viernes": "4", "sabado": "5", "domingo": "6"}
+
+    @staticmethod
+    def _normalizar_dia(valor):
+        s = unicodedata.normalize('NFKD', str(valor)).encode('ascii', 'ignore').decode('ascii').strip().lower()
+        return VentanaGestion._DIA_SIN_ACENTOS.get(s, str(valor).strip())
 
     def _cargar_periodos_desde_bd(self):
         if not self._profesor_id_seleccionado:
@@ -535,6 +548,9 @@ class VentanaGestion:
                 # Clean up dummy 07:00-07:30 period from old Personal tab saves
                 cur.execute("DELETE FROM profesor_disponibilidad WHERE profesor_id=%s AND hora_inicio='07:00' AND hora_fin='07:30' AND dia='0' AND NOT EXISTS (SELECT 1 FROM asignaciones WHERE profesor_id=%s AND hora_inicio='07:00' AND hora_fin='07:30')",
                             (self._profesor_id_seleccionado, self._profesor_id_seleccionado))
+                # Clean up corrupted dia values (non-numeric)
+                cur.execute("DELETE FROM profesor_disponibilidad WHERE profesor_id=%s AND dia NOT IN ('0','1','2','3','4','5','6')",
+                            (self._profesor_id_seleccionado,))
 
                 cur.execute(
                     "SELECT dia, hora_inicio, hora_fin, modalidad FROM profesor_disponibilidad WHERE profesor_id = %s ORDER BY dia",
@@ -694,8 +710,12 @@ class VentanaGestion:
     def _actualizar_todas_periodos(self):
         if not self._profesor_id_seleccionado:
             return
-        for wd in self._periodos_asignacion:
-            for cm, cg in wd['filas_asignacion']:
+        for wd in list(self._periodos_asignacion):
+            for cm, cg in list(wd.get('filas_asignacion', [])):
+                try:
+                    cm.get()
+                except Exception:
+                    continue
                 self._actualizar_horas_periodo(cm, wd['label_restante'])
 
     def _get_horas_materia(self, materia_id):
@@ -726,6 +746,44 @@ class VentanaGestion:
             print(f"Error obteniendo nombre de materia: {e}")
             return None
 
+    def _crear_spinner_hora(self, parent, valor_inicial="07:00"):
+        f = ttk.Frame(parent, style='blue.TFrame')
+        var = tk.StringVar(value=valor_inicial)
+
+        def ajustar(delta):
+            try:
+                partes = var.get().strip().split(':')
+                h = int(partes[0])
+                m = int(partes[1])
+            except (ValueError, IndexError):
+                h, m = 7, 0
+            total_min = h * 60 + m + delta
+            total_min = max(7 * 60, min(total_min, 22 * 60))
+            var.set(f"{total_min // 60:02d}:{total_min % 60:02d}")
+            self._actualizar_todas_periodos()
+
+        btn_menos = ttk.Button(f, text="-", width=3, command=lambda: ajustar(-30))
+        btn_menos.pack(side='left')
+
+        entry = ttk.Entry(f, textvariable=var, width=7, font=self._fuente_label, justify='center')
+        entry.pack(side='left', padx=1)
+
+        def on_key(event):
+            if event.keysym == 'Left':
+                ajustar(-30)
+                return 'break'
+            elif event.keysym == 'Right':
+                ajustar(30)
+                return 'break'
+
+        entry.bind("<Left>", on_key)
+        entry.bind("<Right>", on_key)
+
+        btn_mas = ttk.Button(f, text="+", width=3, command=lambda: ajustar(30))
+        btn_mas.pack(side='left')
+
+        return f, entry, var
+
     def _agregar_periodo_vacio(self, horas_pre=None, grupos_pre=None, materias_pre=None):
         self._agregar_periodo_asignacion(datos=None, horas_pre=horas_pre, grupos_pre=grupos_pre, materias_pre=materias_pre)
 
@@ -746,15 +804,15 @@ class VentanaGestion:
         f_h = ttk.Frame(f_periodo, style='blue.TFrame')
         f_h.pack(fill='x', padx=6, pady=2)
         ttk.Label(f_h, text="Horario:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=2)
-        entry_i = ttk.Entry(f_h, width=10, font=self._fuente_label)
-        entry_i.pack(side='left', padx=2)
-        ttk.Label(f_h, text="-", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=2)
-        entry_f = ttk.Entry(f_h, width=10, font=self._fuente_label)
-        entry_f.pack(side='left', padx=2)
+        f_i, entry_i, var_hora_i = self._crear_spinner_hora(f_h, "07:00")
+        f_i.pack(side='left', padx=1)
+        ttk.Label(f_h, text="-", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=1)
+        f_f, entry_f, var_hora_f = self._crear_spinner_hora(f_h, "07:00")
+        f_f.pack(side='left', padx=1)
 
         if datos:
-            entry_i.insert(0, datos.get('hora_i', ''))
-            entry_f.insert(0, datos.get('hora_f', ''))
+            var_hora_i.set(datos.get('hora_i', '07:00'))
+            var_hora_f.set(datos.get('hora_f', '07:00'))
 
         def _on_horario_change(*args):
             self._actualizar_todas_periodos()
@@ -925,6 +983,199 @@ class VentanaGestion:
             self._periodos_asignacion.pop(idx)
         frame.destroy()
 
+    def _hora_db_a_str(self, h):
+        s = str(h)
+        parts = s.split(':')
+        try:
+            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        except (ValueError, IndexError):
+            return s
+
+    def _guardar_configuracion(self):
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            title="Guardar Configuración de Periodos"
+        )
+        if not filepath:
+            return
+
+        self._progress_config.pack(side='left', padx=5)
+        self._progress_config["value"] = 0
+        self.ventana.update_idletasks()
+
+        try:
+            with obtener_cursor() as ctx:
+                if ctx is None:
+                    return
+                cur, conn = ctx
+
+                # Clean ALL corrupt dia values before saving
+                print("[DEBUG GUARDAR] Limpiando datos corruptos en profesor_disponibilidad...")
+                cur.execute("DELETE FROM profesor_disponibilidad WHERE dia NOT IN ('0','1','2','3','4','5','6')")
+                deleted = cur.rowcount
+                if deleted:
+                    print(f"[DEBUG GUARDAR] Eliminadas {deleted} filas corruptas de disponibilidad")
+
+                cur.execute("SELECT profesor_id, no_cuenta, nombre FROM profesores ORDER BY nombre")
+                prof_rows = cur.fetchall()
+                total = len(prof_rows)
+                config = {"version": 1, "profesores": []}
+
+                for i, (prof_id, no_cuenta, nombre) in enumerate(prof_rows):
+                    cur.execute(
+                        "SELECT dia, hora_inicio, hora_fin, modalidad FROM profesor_disponibilidad WHERE profesor_id = %s AND dia != '6' ORDER BY dia",
+                        (prof_id,)
+                    )
+                    disp_rows = cur.fetchall()
+
+                    periods_map = {}
+                    for dia, hi, hf, modal in disp_rows:
+                        hi_str = self._hora_db_a_str(hi)
+                        hf_str = self._hora_db_a_str(hf)
+                        modal_str = modal or "Presencial"
+                        clave = f"{hi_str}-{hf_str}-{modal_str}"
+                        if clave not in periods_map:
+                            periods_map[clave] = {
+                                "hora_i": hi_str,
+                                "hora_f": hf_str,
+                                "modalidad": modal_str,
+                                "dias": [],
+                                "asignaciones": []
+                            }
+                        dia_num = self._normalizar_dia(dia)
+                        dia_nombre = self.MAPA_DIAS.get(dia_num, dia_num)
+                        if dia_num not in ('0','1','2','3','4','5'):
+                            print(f"[DEBUG GUARDAR] *** DIA ANORMAL: raw={dia!r} -> dia_num={dia_num!r} -> dia_nombre={dia_nombre!r} (prof {prof_id})")
+                        if dia_nombre not in periods_map[clave]["dias"]:
+                            periods_map[clave]["dias"].append(dia_nombre)
+
+                    cur.execute(
+                        "SELECT a.materia_id, a.grupo_id, a.hora_inicio, a.hora_fin, a.modalidad, a.periodo FROM asignaciones a WHERE a.profesor_id = %s AND a.estado != 'cancelada' AND a.hora_inicio IS NOT NULL",
+                        (prof_id,)
+                    )
+                    for row in cur.fetchall():
+                        m_id, g_id, hi, hf, modal, periodo = row
+                        hi_str = self._hora_db_a_str(hi)
+                        hf_str = self._hora_db_a_str(hf)
+                        modal_str = modal or "Presencial"
+                        clave = f"{hi_str}-{hf_str}-{modal_str}"
+                        if clave in periods_map:
+                            periods_map[clave]["asignaciones"].append({
+                                "materia_id": m_id,
+                                "grupo_id": str(g_id),
+                                "periodo": periodo or "A"
+                            })
+
+                    config["profesores"].append({
+                        "profesor_id": prof_id,
+                        "no_cuenta": no_cuenta,
+                        "nombre": nombre,
+                        "periodos": list(periods_map.values())
+                    })
+
+                    self._progress_config["value"] = ((i + 1) / total) * 100
+                    self.ventana.update_idletasks()
+
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+
+                messagebox.showinfo("Configuración", f"Configuración guardada para {total} profesor(es) en:\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al guardar configuración: {e}")
+        finally:
+            self._progress_config.pack_forget()
+
+    def _cargar_configuracion(self):
+        filepath = filedialog.askopenfilename(
+            filetypes=[("JSON files", "*.json")],
+            title="Cargar Configuración de Periodos"
+        )
+        if not filepath:
+            return
+
+        if not messagebox.askyesno("Cargar Configuración",
+                "Se resetearán los periodos y asignaciones de todos los profesores.\nLos profesores no se eliminarán.\n¿Desea continuar?"):
+            return
+
+        self._progress_config.pack(side='left', padx=5)
+        self._progress_config["value"] = 0
+        self.ventana.update_idletasks()
+
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+
+            profesores = config.get("profesores", [])
+            total = len(profesores)
+
+            with obtener_cursor() as ctx:
+                if ctx is None:
+                    return
+                cur, conn = ctx
+
+                print(f"[DEBUG CARGAR] ===== CARGANDO CONFIG ({total} profesores) =====")
+
+                # Clean ALL corrupt dia values before loading
+                cur.execute("DELETE FROM profesor_disponibilidad WHERE dia NOT IN ('0','1','2','3','4','5','6')")
+                n_del = cur.rowcount
+                if n_del:
+                    print(f"[DEBUG CARGAR] Limpiadas {n_del} filas corruptas de disponibilidad")
+
+                for i, prof in enumerate(profesores):
+                    prof_id = prof["profesor_id"]
+                    print(f"[DEBUG CARGAR] Procesando profesor {prof_id} ({prof.get('nombre','?')})")
+
+                    cur.execute("DELETE FROM profesor_disponibilidad WHERE profesor_id = %s", (prof_id,))
+                    cur.execute(
+                        "DELETE FROM asignaciones WHERE profesor_id = %s AND hora_inicio IS NOT NULL",
+                        (prof_id,)
+                    )
+
+                    for periodo in prof.get("periodos", []):
+                        hora_i = periodo["hora_i"]
+                        hora_f = periodo["hora_f"]
+                        modalidad = periodo.get("modalidad", "Presencial")
+                        dias = periodo.get("dias", [])
+                        print(f"[DEBUG CARGAR]   periodo {hora_i}-{hora_f} [{modalidad}], dias JSON: {dias!r}")
+
+                        for dia_nombre in dias:
+                            dia_num = self._normalizar_dia(dia_nombre)
+                            print(f"[DEBUG CARGAR]     dia_nombre={dia_nombre!r} -> dia_num={dia_num!r}")
+                            cur.execute(
+                                "INSERT INTO profesor_disponibilidad (profesor_id, dia, hora_inicio, hora_fin, modalidad) VALUES (%s, %s, %s, %s, %s)",
+                                (prof_id, dia_num, hora_i, hora_f, modalidad)
+                            )
+
+                        for asig in periodo.get("asignaciones", []):
+                            mat_id = asig["materia_id"]
+                            grupo_texto = asig["grupo_id"]
+                            periodo_letra = asig.get("periodo", "A")
+                            grupo_id = self._obtener_id_valido(grupo_texto, es_grupo=True)
+                            if not grupo_id:
+                                continue
+                            cur.execute("SELECT grupo_id FROM grupos WHERE grupo_id = %s", (grupo_id,))
+                            if not cur.fetchone():
+                                cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, 0)", (grupo_id,))
+                            dias_str = ", ".join(dias)
+                            cur.execute(
+                                "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado, periodo, hora_inicio, hora_fin, dias, modalidad) VALUES (%s, %s, %s, 'pendiente', %s, %s, %s, %s, %s)",
+                                (prof_id, mat_id, grupo_id, periodo_letra, hora_i, hora_f, dias_str, modalidad)
+                            )
+
+                    conn.commit()
+
+                    self._progress_config["value"] = ((i + 1) / total) * 100
+                    self.ventana.update_idletasks()
+
+            if self._profesor_id_seleccionado:
+                self._cargar_periodos_desde_bd()
+            messagebox.showinfo("Configuración", f"Configuración cargada para {total} profesor(es)")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al cargar configuración: {e}")
+        finally:
+            self._progress_config.pack_forget()
+
     def _guardar_disponibilidad_periodo(self, profesor_id, hora_i, hora_f, dias_sel, modalidad="Presencial", db_hora_i="", db_hora_f=""):
         try:
             with obtener_cursor() as ctx:
@@ -937,9 +1188,8 @@ class VentanaGestion:
                                 (profesor_id, db_hora_i, db_hora_f))
                 cur.execute("DELETE FROM profesor_disponibilidad WHERE profesor_id = %s AND hora_inicio = %s AND hora_fin = %s",
                             (profesor_id, hora_i, hora_f))
-                mapa_dias = {"Lunes": "0", "Martes": "1", "Miércoles": "2", "Miercoles": "2", "Jueves": "3", "Viernes": "4", "Sábado": "5", "Sabado": "5", "Domingo": "6"}
                 for dia in dias_sel:
-                    dia_num = mapa_dias.get(dia, dia)
+                    dia_num = self._normalizar_dia(dia)
                     cur.execute(
                         "INSERT INTO profesor_disponibilidad (profesor_id, dia, hora_inicio, hora_fin, modalidad) VALUES (%s, %s, %s, %s, %s)",
                         (profesor_id, dia_num, hora_i, hora_f, modalidad)
@@ -948,7 +1198,10 @@ class VentanaGestion:
             print(f"Error guardando disponibilidad: {e}")
 
     def _actualizar_horas_periodo(self, combo_mat, label_restante):
-        materia_txt = combo_mat.get()
+        try:
+            materia_txt = combo_mat.get()
+        except Exception:
+            return
         if not materia_txt:
             return
         mat_id = self._obtener_id_valido(materia_txt)
@@ -1096,6 +1349,17 @@ class VentanaGestion:
                     result_queue.put(("error", "No hay conexión a la base de datos"))
                     return
                 try:
+                    print("[DEBUG ASIGNACION] ===== INICIANDO ASIGNACION AUTOMATICA =====")
+                    # Clean ALL corrupt dia values before running
+                    with obtener_cursor() as ctx2:
+                        if ctx2:
+                            cur2, conn2 = ctx2
+                            cur2.execute("DELETE FROM profesor_disponibilidad WHERE dia NOT IN ('0','1','2','3','4','5','6')")
+                            n2 = cur2.rowcount
+                            if n2:
+                                print(f"[DEBUG ASIGNACION] Limpiadas {n2} filas corruptas de disponibilidad")
+                            conn2.commit()
+                    print(f"[DEBUG ASIGNACION] Modo: {modo_seleccionado}")
                     generador = GeneradorHorarios(conexion)
                     generador.separacion_online_activa = False
                     resultado = generador.ejecutar(modo=modo_seleccionado)
@@ -1105,10 +1369,16 @@ class VentanaGestion:
                         cantidad = resultado
                         alertas = []
                     result_queue.put(("ok", cantidad, alertas))
+                except Exception as e:
+                    import traceback
+                    traceback.print_exc()
+                    result_queue.put(("error", f"{type(e).__name__}: {e}"))
                 finally:
                     conexion.close()
             except Exception as e:
-                result_queue.put(("error", str(e)))
+                import traceback
+                traceback.print_exc()
+                result_queue.put(("error", f"{type(e).__name__}: {e}"))
 
             def procesar_resultado():
                 self._en_operacion = False
@@ -1120,6 +1390,7 @@ class VentanaGestion:
                     return
 
                 if tipo == "error":
+                    print(f"[DEBUG ASIGNACION] ERROR CAPTURADO: {datos[0]}")
                     messagebox.showerror("Error", f"Falló la generación de horarios: {datos[0]}")
                     return
 
@@ -1137,8 +1408,8 @@ class VentanaGestion:
                     messagebox.showinfo("Éxito",
                         f"¡Perfecto! Se generaron {cantidad} horarios sin conflictos en modo '{modo_seleccionado}'.")
 
+                self._cargar_tensor_diferido(forzar=True)
                 self.notebook.select(self.pes1)
-                self._cargar_tensor_diferido()
 
             self.ventana.after(0, procesar_resultado)
 
@@ -1262,7 +1533,7 @@ class VentanaGestion:
         f_contenido.pack(fill='both', expand=True)
 
         cols = ('Materia', 'Grupo', 'Profesor', 'Causa')
-        self.tabla_alertas = ttk.Treeview(f_contenido, columns=cols, show='headings', height=12)
+        self.tabla_alertas = ttk.Treeview(f_contenido, columns=cols, show='headings', height=8)
         for c in cols:
             self.tabla_alertas.heading(c, text=c)
         self.tabla_alertas.column('Materia', width=200)
@@ -1280,14 +1551,52 @@ class VentanaGestion:
                   background='#0A0F1E', foreground='white',
                   font=self._fuente_sub).pack(anchor='w', pady=(5, 2))
 
-        self.texto_detalle_alerta = tk.Text(f_contenido, height=14, wrap='word',
+        self.texto_detalle_alerta = tk.Text(f_contenido, height=6, wrap='word',
                                             font=("Consolas", 10),
                                             bg='#1a1a1a', fg='#e0e0e0',
                                             relief='flat', bd=2)
         self.texto_detalle_alerta.pack(fill='both', expand=True)
 
+        # --- Frame de resolución de conflictos (oculto por defecto) ---
+        self._frame_resolucion = ttk.LabelFrame(f_contenido, text="Resolución de Conflicto", style='blue.TFrame')
+        self._frame_resolucion.pack(fill='x', pady=(5, 0))
+
+        self._resolucion_inner = ttk.Frame(self._frame_resolucion, style='blue.TFrame')
+        self._resolucion_inner.pack(fill='x', padx=6, pady=4)
+
+        self._resolucion_label = ttk.Label(self._resolucion_inner, text="Selecciona qué asignación conservar en este horario:",
+                                           background='#0A0F1E', foreground='#FFD700', font=self._fuente_label)
+        self._resolucion_label.pack(anchor='w')
+
+        self._radio_var = tk.StringVar(value="")
+        self._radio_frame = ttk.Frame(self._resolucion_inner, style='blue.TFrame')
+        self._radio_frame.pack(fill='x', pady=4)
+
+        self._btn_resolver = ttk.Button(self._resolucion_inner, text="Asignar Seleccionada y Buscar Alternativas",
+                                        command=self._resolver_conflicto, state='disabled')
+        self._btn_resolver.pack(pady=4)
+
+        self._frame_resolucion_alternativas = ttk.Frame(self._resolucion_inner, style='blue.TFrame')
+        self._frame_resolucion_alternativas.pack(fill='x', pady=4)
+
+        self._ocultar_frame_resolucion()
+
         ttk.Button(f_superior, text="Limpiar Alertas",
                    command=self._limpiar_alertas).pack(pady=5)
+
+    def _ocultar_frame_resolucion(self):
+        self._frame_resolucion.pack_forget()
+
+    def _mostrar_frame_resolucion(self):
+        self._frame_resolucion.pack(fill='x', pady=(5, 0))
+
+    def _limpiar_resolucion(self):
+        for w in self._radio_frame.winfo_children():
+            w.destroy()
+        for w in self._frame_resolucion_alternativas.winfo_children():
+            w.destroy()
+        self._radio_var.set("")
+        self._btn_resolver.config(state='disabled')
 
     def _mostrar_alertas_en_tabla(self):
         if not hasattr(self, 'tabla_alertas'):
@@ -1295,14 +1604,31 @@ class VentanaGestion:
         for item in self.tabla_alertas.get_children():
             self.tabla_alertas.delete(item)
         self.texto_detalle_alerta.delete('1.0', tk.END)
+        self._ocultar_frame_resolucion()
         for a in self._ultimas_alertas:
-            causa = a['causas'][0] if a.get('causas') else 'Sin causa identificada'
-            self.tabla_alertas.insert('', 'end', values=(
-                a.get('materia', '?'),
-                a.get('grupo', '?'),
-                a.get('profesor', '?'),
-                causa
-            ))
+            if a.get('tipo') == 'conflicto':
+                conflictos = a.get('conflictos', [])
+                materia_text = conflictos[0]['materia'] if conflictos else '?'
+                if len(conflictos) > 1:
+                    materia_text += f" (+{len(conflictos)-1} más)"
+                grupo_text = conflictos[0]['grupo'] if conflictos else '?'
+                if len(conflictos) > 1:
+                    grupo_text += f" (+{len(conflictos)-1})"
+                causa = f"CONFLICTO: {len(conflictos)} materias chocan en horario"
+                self.tabla_alertas.insert('', 'end', values=(
+                    materia_text,
+                    grupo_text,
+                    a.get('profesor', '?'),
+                    causa
+                ))
+            else:
+                causa = a['causas'][0] if a.get('causas') else 'Sin causa identificada'
+                self.tabla_alertas.insert('', 'end', values=(
+                    a.get('materia', '?'),
+                    a.get('grupo', '?'),
+                    a.get('profesor', '?'),
+                    causa
+                ))
 
     def _mostrar_detalle_alerta(self, event=None):
         sel = self.tabla_alertas.selection()
@@ -1313,6 +1639,14 @@ class VentanaGestion:
             return
         a = self._ultimas_alertas[idx]
         self.texto_detalle_alerta.delete('1.0', tk.END)
+        self._ocultar_frame_resolucion()
+
+        if a.get('tipo') == 'conflicto':
+            self._mostrar_detalle_conflicto(a)
+        else:
+            self._mostrar_detalle_normal(a)
+
+    def _mostrar_detalle_normal(self, a):
         texto = f"MATERIA: {a.get('materia', '?')}  |  GRUPO: {a.get('grupo', '?')}\n"
         texto += f"PROFESOR: {a.get('profesor', '?')}  |  ID: {a.get('profesor_id', '?')}\n"
         texto += "-"*70 + "\n"
@@ -1329,6 +1663,224 @@ class VentanaGestion:
                 texto += f"  {e}\n"
         self.texto_detalle_alerta.insert('1.0', texto)
         self.texto_detalle_alerta.see('1.0')
+
+    def _mostrar_detalle_conflicto(self, a):
+        conflictos = a.get('conflictos', [])
+        alternativas = a.get('alternativas', {})
+
+        texto = f"⚠ CONFLICTO DE HORARIO ⚠\n"
+        texto += f"PROFESOR: {a.get('profesor', '?')}  |  ID: {a.get('profesor_id', '?')}\n"
+        texto += "="*70 + "\n"
+        texto += f"CAUSA: {a['causas'][0] if a.get('causas') else 'Conflicto detectado'}\n"
+        texto += "\nASIGNACIONES EN CONFLICTO:\n"
+        for i, c in enumerate(conflictos, 1):
+            texto += f"  {i}. {c['materia']} - Grupo: {c['grupo']}  ({c['hora_inicio']}-{c['hora_fin']})  [{c['dias']}]\n"
+        if alternativas:
+            texto += "\n" + "~"*70 + "\n"
+            texto += "HORARIOS ALTERNATIVOS SUGERIDOS:\n"
+            for asig_id, alts in alternativas.items():
+                c_info = next((cc for cc in conflictos if cc['asignacion_id'] == asig_id), None)
+                mat_name = c_info['materia'] if c_info else f"ID {asig_id}"
+                texto += f"\n  Para {mat_name}:\n"
+                for alt in alts[:3]:
+                    texto += f"    → {alt['dia']} {alt['hora_inicio']}-{alt['hora_fin']}\n"
+        texto += "\n" + "="*70 + "\n"
+        texto += "Usa los controles de abajo para resolver el conflicto."
+
+        self.texto_detalle_alerta.insert('1.0', texto)
+        self.texto_detalle_alerta.see('1.0')
+
+        # Build resolution radio buttons
+        self._limpiar_resolucion()
+        if len(conflictos) > 1:
+            for i, c in enumerate(conflictos):
+                label = f"{c['materia']} - {c['grupo']}  ({c['hora_inicio']}-{c['hora_fin']}) [{c['dias']}]"
+                rb = ttk.Radiobutton(self._radio_frame, text=label, variable=self._radio_var,
+                                     value=str(c['asignacion_id']),
+                                     command=lambda: self._btn_resolver.config(state='normal'))
+                rb.pack(anchor='w', padx=10, pady=2)
+            self._radio_var.set(str(conflictos[0]['asignacion_id']))
+            self._btn_resolver.config(state='normal')
+            self._mostrar_frame_resolucion()
+
+            # Show alternatives for non-selected (when user picks)
+            self._mostrar_alternativas_en_frame(conflictos, alternativas)
+
+    def _mostrar_alternativas_en_frame(self, conflictos, alternativas):
+        for w in self._frame_resolucion_alternativas.winfo_children():
+            w.destroy()
+
+        if not alternativas:
+            ttk.Label(self._frame_resolucion_alternativas,
+                      text="No se encontraron horarios alternativos automáticos.",
+                      background='#0A0F1E', foreground='#FF6B6B',
+                      font=self._fuente_label).pack(anchor='w', padx=10)
+            return
+
+        ttk.Label(self._frame_resolucion_alternativas,
+                  text="Alternativas disponibles (se aplicarán al resolver):",
+                  background='#0A0F1E', foreground='#98FB98',
+                  font=self._fuente_label).pack(anchor='w', padx=10, pady=(4, 2))
+
+        for asig_id, alts in alternativas.items():
+            c_info = next((cc for cc in conflictos if cc['asignacion_id'] == asig_id), None)
+            if not c_info:
+                continue
+            mat_name = c_info['materia']
+            f_alt = ttk.Frame(self._frame_resolucion_alternativas, style='blue.TFrame')
+            f_alt.pack(fill='x', padx=15, pady=2)
+            alt_text = f"{mat_name} ({c_info['grupo']}): "
+            alt_opts = []
+            for alt in alts[:3]:
+                alt_opts.append(f"{alt['dia']} {alt['hora_inicio']}-{alt['hora_fin']}")
+            alt_text += " | ".join(alt_opts) if alt_opts else "Sin alternativas"
+            ttk.Label(f_alt, text=alt_text, background='#0A0F1E',
+                      foreground='#e0e0e0', font=self._fuente_label).pack(anchor='w')
+
+    def _resolver_conflicto(self):
+        selected_id = self._radio_var.get()
+        if not selected_id:
+            return
+
+        alerta = None
+        for a in self._ultimas_alertas:
+            if a.get('tipo') == 'conflicto':
+                if any(str(c['asignacion_id']) == selected_id for c in a.get('conflictos', [])):
+                    alerta = a
+                    break
+
+        if not alerta:
+            messagebox.showerror("Error", "No se encontró el conflicto seleccionado.")
+            return
+
+        conflictos = alerta.get('conflictos', [])
+        alternativas = alerta.get('alternativas', {})
+
+        with obtener_cursor() as ctx:
+            if ctx is None:
+                return
+            cur, conn = ctx
+            try:
+                selected_data = next(c for c in conflictos if str(c['asignacion_id']) == selected_id)
+
+                # obtener_cursor() returns tuples, not dicts
+                cur.execute(
+                    "SELECT hora_inicio, hora_fin, dias, modalidad, profesor_id, materia_id FROM asignaciones WHERE asignacion_id = %s",
+                    (selected_id,)
+                )
+                row = cur.fetchone()
+                if not row:
+                    messagebox.showerror("Error", "No se encontró la asignación en BD.")
+                    return
+                # row: (hora_inicio, hora_fin, dias, modalidad, profesor_id, materia_id)
+                hora_inicio = row[0]
+                hora_fin = row[1]
+                dias_bd = row[2]
+                modalidad = row[3]
+                profesor_id = row[4]
+                materia_id = row[5]
+
+                cur.execute(
+                    "SELECT tipo FROM materias WHERE materia_id = %s",
+                    (materia_id,)
+                )
+                tipo_row = cur.fetchone()
+                tipo_materia = (tipo_row[0] or 'Normal').lower() if tipo_row else 'normal'
+
+                es_mediacion = str(modalidad or 'Presencial') == 'Mediacion Tecnologica'
+
+                if es_mediacion:
+                    cur.execute("SELECT salon_id FROM salones WHERE salon_id LIKE 'MEDIACION_TECNOLOGICA%' LIMIT 1")
+                elif tipo_materia == 'auditorio':
+                    cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Auditorio' LIMIT 1")
+                elif tipo_materia == 'laboratorio':
+                    cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Laboratorio' OR tipo = 'Normal' LIMIT 1")
+                elif tipo_materia in ('tecnologica', 'tecnológica'):
+                    cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Tecnologica' LIMIT 1")
+                else:
+                    cur.execute("SELECT salon_id FROM salones WHERE salon_id NOT LIKE 'MEDIACION_TECNOLOGICA%' LIMIT 1")
+
+                salon_row = cur.fetchone()
+                if not salon_row:
+                    messagebox.showerror("Error", "No hay salones compatibles disponibles.")
+                    return
+                salon_id = salon_row[0]
+
+                def _formatear_hora_valor(h):
+                    if isinstance(h, datetime.timedelta):
+                        total_seconds = int(h.total_seconds())
+                        hh = total_seconds // 3600
+                        mm = (total_seconds % 3600) // 60
+                        return f"{hh:02d}:{mm:02d}:00"
+                    elif isinstance(h, datetime.time):
+                        return f"{h.hour:02d}:{h.minute:02d}:00"
+                    return str(h)[:5] + ':00'
+
+                dias_list = [d.strip() for d in dias_bd.split(',')] if dias_bd else ['Lunes']
+                hora_i = _formatear_hora_valor(hora_inicio)
+                hora_f = _formatear_hora_valor(hora_fin)
+
+                for dia in dias_list:
+                    cur.execute(
+                        "INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin) VALUES (%s, %s, %s, %s, %s)",
+                        (selected_id, salon_id, dia, hora_i, hora_f)
+                    )
+
+                cur.execute("UPDATE asignaciones SET estado = 'asignado' WHERE asignacion_id = %s", (selected_id,))
+
+                for c in conflictos:
+                    if str(c['asignacion_id']) != selected_id:
+                        alt_list = alternativas.get(c['asignacion_id'], [])
+                        if alt_list:
+                            alt = alt_list[0]
+                            new_dias = alt['dia']
+                            new_hi = alt['hora_inicio'] + ':00'
+                            new_hf = alt['hora_fin'] + ':00'
+
+                            cur.execute(
+                                "UPDATE asignaciones SET hora_inicio = %s, hora_fin = %s, dias = %s, estado = 'pendiente' WHERE asignacion_id = %s",
+                                (new_hi, new_hf, new_dias, c['asignacion_id'])
+                            )
+
+                            cur.execute(
+                                "SELECT profesor_id FROM asignaciones WHERE asignacion_id = %s",
+                                (c['asignacion_id'],)
+                            )
+                            prof_row = cur.fetchone()
+                            if prof_row:
+                                mapa_dias_inv = {"Lunes": "0", "Martes": "1", "Miércoles": "2", "Jueves": "3", "Viernes": "4", "Sábado": "5"}
+                                dia_num = mapa_dias_inv.get(alt['dia'], "0")
+                                cur.execute(
+                                    "DELETE FROM profesor_disponibilidad WHERE profesor_id = %s AND hora_inicio = %s AND hora_fin = %s",
+                                    (prof_row[0], new_hi, new_hf)
+                                )
+                                cur.execute(
+                                    "INSERT INTO profesor_disponibilidad (profesor_id, dia, hora_inicio, hora_fin, modalidad) VALUES (%s, %s, %s, %s, 'Presencial')",
+                                    (prof_row[0], dia_num, new_hi, new_hf)
+                                )
+
+                conn.commit()
+
+                messagebox.showinfo(
+                    "Conflicto Resuelto",
+                    f"✓ ASIGNADA: {selected_data['materia']} ({selected_data['grupo']})\n"
+                    f"  Horario: {selected_data['hora_inicio']}-{selected_data['hora_fin']} [{selected_data['dias']}]\n"
+                    f"  Salón: {salon_id}\n\n"
+                    f"Las demás asignaciones recibieron horarios alternativos sugeridos.\n"
+                    f"Revisa la Vista Previa para ver los cambios."
+                )
+
+                self._limpiar_resolucion()
+                self._ocultar_frame_resolucion()
+
+                self._ultimas_alertas = [a for a in self._ultimas_alertas if a is not alerta]
+                self._mostrar_alertas_en_tabla()
+
+                self.actualizar_vista_previa()
+
+            except Exception as e:
+                conn.rollback()
+                messagebox.showerror("Error", f"Error al resolver conflicto: {e}")
 
     def _limpiar_alertas(self):
         self._ultimas_alertas = []

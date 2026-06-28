@@ -55,6 +55,7 @@ servicio_S/
 ├── arrancar.py                      # Punto de entrada
 ├── arrancar.spec                    # Configuración PyInstaller
 ├── DOCUMENTACION.md                 # Este archivo
+├── setup_bd.sql                     # Script completo de creación de BD (incluye columna dias)
 ├── migrar_disponibilidad.sql               # Migración de disponibilidad multi-periodo
 ├── migrar_grupos.sql                       # Migración: columna nivel en grupos + modalidad en asignaciones
 ├── migrar_profesores.sql                   # Migración: columna no_cuenta, regenerar profesor_id
@@ -117,7 +118,7 @@ arrancar.py
 | `materias`               | Materias con horas, semestre y tipo                         |
 | `salones`                | Salones con capacidad y tipo (incluye MEDIACION_TECNOLOGICA)|
 | `grupos`                 | Grupos (S1A, S2B, etc.) con nivel (semestre)               |
-| `asignaciones`           | Relación profesor-materia-grupo-periodo-modalidad (con estado, hora_inicio, hora_fin)|
+| `asignaciones`           | Relación profesor-materia-grupo-periodo-modalidad (con estado, hora_inicio, hora_fin, dias)|
 | `horarios`               | Horarios generados (salón, día, hora)           |
 | `semestres`              | Catálogo de semestres                           |
 
@@ -300,7 +301,7 @@ existentes no son suficientes.
 ```
 ejecutar(modo)
   ├── cargar_datos(modo)         → Carga asignaciones (con hora_i/hora_f,
-  │                                horas_semana de materia),
+  │                                horas_semana de materia, a.dias),
   │                                disponibilidad por profesor (días normalizados),
   │                                salones (auto-crea MT si faltan)
   ├── _limpiar_matrices()        → Resetea ocupación + uso_salones +
@@ -317,8 +318,10 @@ ejecutar(modo)
        ├── slot_inicio / slot_duracion desde hora_inicio / hora_fin
        │
        ├── _dias_disponibles_para_horario(asignacion)
-       │   → Filtra profesor_disponibilidad buscando días donde
+       │   → Si asignacion['dias'] no es NULL, filtra solo esos días
+       │   → Luego cruza con profesor_disponibilidad para verificar que
        │     [hora_inicio, hora_fin] quepa dentro del rango del profesor
+       │   → NULL en dias = backward compat (usa toda la disponibilidad)
        │
        ├── _salones_compatibles(tipo_materia, es_mediacion)
        │
@@ -384,7 +387,20 @@ El motor determina automáticamente cuántas sesiones semanales crear:
 Si `session_blocks` inicial (la ventana) da menos de 1 sesión, se recalcula
 distribuyendo `total_bloques / num_dias`, con un mínimo de 4 bloques (2h).
 
-#### 6.9.8 Diagnóstico de fallos
+#### 6.9.8 Detección de conflictos entre asignaciones del mismo profesor
+
+Antes de asignar salones, el motor ejecuta:
+
+1. **`_distribuir_ventanas_compartidas()`** — agrupa asignaciones del mismo profesor
+   con idéntica ventana horaria y las distribuye secuencialmente si caben.
+2. **`_detectar_conflictos()`** — mediante BFS sobre un grafo de conflictos detecta
+   grupos de asignaciones del mismo profesor con slots y días solapados.
+3. Las asignaciones conflictivas se **excluyen del proceso de asignación** y se
+   reportan como alertas interactivas en la pestaña Alertas.
+4. **`_sugerir_alternativas()`** — para cada asignación conflictiva busca horarios
+   libres dentro de la disponibilidad del profesor.
+
+#### 6.9.9 Diagnóstico de fallos
 
 Cuando una asignación no se puede realizar, se genera una alerta con:
 - Causas identificadas (falta de salones compatibles, disponibilidad insuficiente)
@@ -452,7 +468,7 @@ Panel derecho:
 
 Los periodos de disponibilidad son dinámicos: se pueden agregar/quitar.
 Cada periodo contiene:
-- Hora inicio / Hora fin (Entry)
+- Hora inicio / Hora fin (spinner con botones +/-, flechas ←/→, valor predeterminado 07:00)
 - Checkboxes para los 6 días de la semana
 - Botón "Quitar"
 
@@ -524,7 +540,7 @@ usando como referencia 1920x1080.
 - Botón "Limpiar" para resetear filtros.
 
 **Acciones:**
-- Botón "Liberar": libera la asignación seleccionada (borra horarios, vuelve a pendiente).
+- Botón "Liberar": elimina la asignación seleccionada (DELETE FROM horarios + DELETE FROM asignaciones).
 - Botón "Borrar Todas": elimina todas las asignaciones y horarios, resetea AUTO_INCREMENT.
 
 #### Pestaña Alertas (pes_alertas)
@@ -572,6 +588,11 @@ Visualización gráfica con matplotlib:
 | `_construir_pestana_alertas()`  | Construye la interfaz de la pestaña Alertas  |
 | `_mostrar_alertas_en_tabla()`   | Puebla la tabla de alertas con resultados    |
 | `_mostrar_detalle_alerta()`     | Muestra detalle completo de la alerta seleccionada |
+| `_mostrar_detalle_conflicto()`  | Muestra detalle de conflicto con radios y resolución |
+| `_resolver_conflicto()`         | Asigna ganadora y mueve perdedoras a alternativas |
+| `_crear_spinner_hora()`         | Control de hora con botones +/- y flechas ←/→ |
+| `_guardar_configuracion()`      | Guarda todos los periodos y asignaciones a JSON |
+| `_cargar_configuracion()`       | Carga JSON, resetea periodos e inserta datos |
 
 #### Grupos por semestre
 
@@ -629,10 +650,10 @@ El método `_cargar_grupos_desde_bd()` determina el semestre de cada grupo:
 
 ### 8.3 Asignaciones
 - Una misma combinación profesor-materia-grupo-modalidad no puede duplicarse
-- Cada asignación tiene: `periodo` (A/B), `modalidad` (Presencial/Mediacion Tecnologica), `hora_inicio`, `hora_fin`, `estado` (pendiente/asignado)
+- Cada asignación tiene: `periodo` (A/B), `modalidad` (Presencial/Mediacion Tecnologica), `hora_inicio`, `hora_fin`, `dias`, `estado` (pendiente/asignado)
 - Las asignaciones se crean desde tarjetas de periodo que también persisten la disponibilidad horaria en `profesor_disponibilidad`
 - Si la misma materia+grupo ya está asignada a otro profesor, se pregunta si desea sustituirlo
-- Al liberar una asignación se borran sus horarios y vuelve a "pendiente"
+- Al liberar una asignación se borran sus horarios y se elimina la asignación (DELETE)
 - Al resetear se borran todas las asignaciones y horarios (resetea AUTO_INCREMENT)
 
 ### 8.4 Grupos
@@ -1050,3 +1071,80 @@ la regla que obliga a que una clase en línea comience 2.5h después de la
 - **Múltiples sesiones por día:** Si hay más sesiones necesarias que días
   disponibles, se apilan varias sesiones consecutivas en el mismo día (avanzando
   `slot_inicio + session_blocks` por cada una).
+
+### 11.29 Nueva columna `dias` en asignaciones, correcciones en Liberar/Vista Previa y Personal (2026-06-23)
+
+**Archivos:** `setup_bd.sql`, `src/UI/ventana_gestion.py`, `src/motor_horarios_nuevo.py`, `src/UI/ventana_principal.py`
+
+- Nueva columna `dias VARCHAR(50) DEFAULT NULL` en tabla `asignaciones` (ya incluida en `setup_bd.sql`).
+- Migración `_migrar_bd()` y `_backfill_dias()` se ejecutan al iniciar `VentanaGestion`; backfill popula `dias` desde `profesor_disponibilidad` para registros existentes.
+- **Liberar:** La Treeview de vista previa ahora usa `iid=str(asig_id)` en lugar de pasar el ID como 4º valor (Treeview ignoraba columnas extra). Se corrigió el índice de `estado` de `row[6]` a `row[7]`. Liberar ahora ejecuta `DELETE FROM horarios` + `DELETE FROM asignaciones` (era UPDATE a 'pendiente').
+- **Motor:** `cargar_datos()` SELECT incluye `a.dias`. `_dias_disponibles_para_horario()` filtra por `asignacion['dias']` cuando no es NULL (NULL = backward compat).
+- **Guardar:** `guardar()` pasa `", ".join(dias_sel)` a `_asignar_periodo()`, que lo almacena en INSERT/UPDATE.
+- **Personal:** `evento_boton_profesores()` usa `self.obtener_periodos_desde_ui()` en lugar de `[]` para preservar disponibilidad al editar nombre.
+
+### 11.30 Control de hora con botones +/- y teclas ←/→ (2026-06-28)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+- Reemplazados los `ttk.Entry` simples de hora_inicio / hora_fin por un control personalizado `_crear_spinner_hora()`.
+- Cada control contiene:
+  - Botón `-` (disminuye 30 min)
+  - Entry centrado con `textvariable`
+  - Botón `+` (aumenta 30 min)
+  - Valor predeterminado: `07:00`
+  - Rango: 7:00 – 22:00
+- Las teclas `←`/`→` también ajustan ±30 min (reemplazan el movimiento del cursor dentro del entry).
+- Al presionar cualquier botón o flecha se actualiza automáticamente el cálculo de horas restantes (`_actualizar_todas_periodos()`).
+- El campo sigue aceptando escritura manual con formato `HH:MM`.
+
+### 11.31 Detección de conflictos y resolución interactiva en pestaña Alertas (2026-06-28)
+
+**Archivos:** `src/motor_horarios_nuevo.py`, `src/UI/ventana_gestion.py`
+
+**Motor (`motor_horarios_nuevo.py`):**
+- `_obtener_dias_de_asignacion(asignacion)` — extrae los días de una asignación desde su campo `dias` o desde `profesor_disponibilidad`.
+- `_tienen_conflicto_horario(a1, a2)` — detecta si dos asignaciones del mismo profesor solapan en slots y días.
+- `_detectar_conflictos()` — construye un grafo de conflictos usando BFS para agrupar todas las asignaciones conectadas que chocan en horario.
+- `_sugerir_alternativas(asignacion, conflict_group)` — busca horarios libres en la disponibilidad del profesor para cada asignación conflictiva.
+- `ejecutar()` modificado: antes del bucle principal ejecuta `_distribuir_ventanas_compartidas()`, luego `_detectar_conflictos()`. Las asignaciones conflictivas se saltan y se agrupan en alertas de tipo `"conflicto"`.
+
+**UI (`ventana_gestion.py`):**
+- La pestaña Alertas muestra conflictos como `"CONFLICTO: N materias chocan en horario"`.
+- Al seleccionar una alerta de conflicto, se muestra:
+  - Lista de asignaciones en conflicto con su horario actual.
+  - Alternativas sugeridas por asignación.
+  - **Radio buttons** para seleccionar qué asignación conserva el horario.
+  - Botón "Asignar Seleccionada y Buscar Alternativas".
+- `_resolver_conflicto()`: asigna la ganadora (inserta horarios, actualiza estado), mueve las perdedoras a su primer horario alternativo, actualiza `profesor_disponibilidad`, remueve la alerta y refresca la vista previa.
+
+### 11.32 Distribución automática de ventanas horarias compartidas (2026-06-28)
+
+**Archivo:** `src/motor_horarios_nuevo.py`
+
+- `_distribuir_ventanas_compartidas()`: agrupa asignaciones por `(profesor_id, slot_inicio, slot_duracion)`. Para grupos con ≥2 miembros:
+  - Calcula los bloques por día (`bpd`) que necesita cada asignación según `horas_semana`.
+  - Si `sum(bpd) ≤ slot_duracion`, redistribuye la ventana secuencialmente (respetando orden de `asignacion_id`):
+    - Asignación 1: `slot_inicio` original
+    - Asignación 2: `slot_inicio + bpd_1`
+    - Asignación 3: `slot_inicio + bpd_1 + bpd_2`, etc.
+  - Si no caben todas, se dejan como están (se detectarán como conflicto).
+- Se ejecuta en `ejecutar()` **antes** de `_detectar_conflictos()`, para que las asignaciones distribuidas tengan slots distintos y no se marquen como conflicto.
+
+### 11.33 Guardar/Cargar configuración de periodos (2026-06-28)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+- Botones **"Guardar Config"** y **"Cargar Config"** en la barra de filtros, junto al botón "Iniciar Asignaciones de Aula".
+- **Guardar (`_guardar_configuracion`):**
+  - Consulta todos los profesores, sus periodos (`profesor_disponibilidad`) y asignaciones (`asignaciones`).
+  - Agrupa por horario y modalidad.
+  - Guarda en archivo JSON con estructura: `{version, profesores: [{profesor_id, no_cuenta, nombre, periodos: [{hora_i, hora_f, modalidad, dias, asignaciones: [{materia_id, grupo_id, periodo}]}]}]}`.
+  - Barra de progreso mientras se procesan los profesores.
+- **Cargar (`_cargar_configuracion`):**
+  - Lee el archivo JSON.
+  - Confirma con el usuario que se resetearán los periodos (sin eliminar profesores).
+  - Por cada profesor: elimina `profesor_disponibilidad` y `asignaciones` existentes, inserta los datos guardados, crea grupos si no existen.
+  - Al finalizar, refresca la UI del profesor actual.
+  - Barra de progreso durante la operación.
+- Método auxiliar `_hora_db_a_str(h)` — formatea correctamente valores `datetime.time` y `datetime.timedelta` a `"HH:MM"`.

@@ -1,6 +1,8 @@
+import threading
 import numpy as np
 import mysql.connector
 import re
+import unicodedata
 from src.conexion import get_conexion
 
 def _cargar_grupos_desde_bd():
@@ -43,8 +45,11 @@ class MemoriaHorarioGrafico:
         self.tensor = None
         self.entidades = []
         self.modo = "Salón"
+        self._carga_count = 0
 
     def obtener_datos_servidor(self, modo):
+        self._carga_count += 1
+        cid = self._carga_count
         conn = get_conexion()
         if not conn:
             return [], {}, {}
@@ -52,6 +57,19 @@ class MemoriaHorarioGrafico:
 
         SEGUNDOS_7AM = 25200
         SEGUNDOS_MEDIA_HORA = 1800
+
+        _NUM_A_NOMBRE = {"0": "Lunes", "1": "Martes", "2": "Miércoles", "3": "Jueves", "4": "Viernes", "5": "Sábado", "6": "Domingo"}
+        _NOMBRE_SIN_ACENTOS = {"lunes": "Lunes", "martes": "Martes", "miercoles": "Miércoles", "jueves": "Jueves", "viernes": "Viernes", "sabado": "Sábado", "domingo": "Domingo"}
+
+        def _normalizar_dia(valor):
+            if isinstance(valor, int):
+                return _NUM_A_NOMBRE.get(str(valor), str(valor))
+            s = str(valor).strip()
+            if s in _NUM_A_NOMBRE:
+                return _NUM_A_NOMBRE[s]
+            s_norm = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii').lower()
+            return _NOMBRE_SIN_ACENTOS.get(s_norm, s)
+
         mapeo_dias = {"Lunes": 1, "Martes": 2, "Miércoles": 3, "Jueves": 4, "Viernes": 5, "Sábado": 6}
 
         try:
@@ -87,8 +105,10 @@ class MemoriaHorarioGrafico:
 
             verdadero_horario = []
             for reg in cursor.fetchall():
-                dia_col = mapeo_dias.get(reg['dia'], 0)
+                dia_normalizado = _normalizar_dia(reg['dia'])
+                dia_col = mapeo_dias.get(dia_normalizado, 0)
                 if dia_col == 0:
+                    print(f"[DEBUG VISOR #{cid}] dia no mapeable: raw={reg['dia']!r} -> norm={dia_normalizado!r} (salon={reg['salon_id']!r}, asig={reg.get('profesor_id','?')})")
                     continue
 
                 idx_i = int((reg['hora_inicio'].total_seconds() - SEGUNDOS_7AM) / SEGUNDOS_MEDIA_HORA) + 1

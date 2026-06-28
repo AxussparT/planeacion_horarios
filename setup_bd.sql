@@ -95,3 +95,5 @@ INSERT IGNORE INTO semestres (id_semestre, nombre) VALUES
 (10, 'Décimo Semestre');
 
 SELECT 'BD bd_seso creada correctamente.' AS resultado;
+
+ALTER TABLE asignaciones ADD COLUMN dias VARCHAR(50) DEFAULT NULL

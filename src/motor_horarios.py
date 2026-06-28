@@ -9,7 +9,7 @@ class GeneradorHorarios:
 
         self.HORA_INICIO_CLASES = 7
         self.MINUTOS_BLOQUE = 30
-        self.SLOTS_DIARIOS = 30
+        self.SLOTS_DIARIOS = 32
 
         self.ocupacion_salones = {}
         self.ocupacion_profesores = {}
