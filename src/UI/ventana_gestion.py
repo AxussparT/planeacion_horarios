@@ -110,7 +110,9 @@ class VentanaGestion:
         self._last_height = 0
         self._scale_factor = 1.0
         self._en_operacion = False
+        self._ultimo_config_path = None
         self._profesor_id_seleccionado = None
+        self._debounce_after_id = None
         self._periodo_seleccionado = None
         self._semestres_filtrados = []
         
@@ -234,6 +236,7 @@ class VentanaGestion:
         btn_asignar.pack(side='left', padx=5)
         ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=8)
         ttk.Button(frame_filtros, text="Guardar Config", command=self._guardar_configuracion).pack(side='left', padx=2)
+        ttk.Button(frame_filtros, text="Actualizar Config", command=self._actualizar_configuracion).pack(side='left', padx=2)
         ttk.Button(frame_filtros, text="Cargar Config", command=self._cargar_configuracion).pack(side='left', padx=2)
         self._progress_config = ttk.Progressbar(frame_filtros, mode='determinate', length=120)
 
@@ -684,14 +687,20 @@ class VentanaGestion:
         db_disponibles, asignadas = self._calcular_horas_profesor(profesor_id)
         baseline_minutos = 0
         ui_minutos = 0
-        for wd in self._periodos_asignacion:
+        for wd in list(self._periodos_asignacion):
             baseline_minutos += wd.get('db_minutos', 0)
             entry_i = wd.get('entry_i')
             entry_f = wd.get('entry_f')
             vars_dias = wd.get('vars_dias', {})
             if entry_i and entry_f:
-                hi_str = entry_i.get().strip()
-                hf_str = entry_f.get().strip()
+                try:
+                    hi_str = entry_i.get().strip()
+                except Exception:
+                    continue
+                try:
+                    hf_str = entry_f.get().strip()
+                except Exception:
+                    continue
                 if hi_str and hf_str:
                     try:
                         parts_i = hi_str.split(':')
@@ -708,6 +717,7 @@ class VentanaGestion:
         return disponibles, asignadas
 
     def _actualizar_todas_periodos(self):
+        self._debounce_after_id = None
         if not self._profesor_id_seleccionado:
             return
         for wd in list(self._periodos_asignacion):
@@ -760,7 +770,9 @@ class VentanaGestion:
             total_min = h * 60 + m + delta
             total_min = max(7 * 60, min(total_min, 22 * 60))
             var.set(f"{total_min // 60:02d}:{total_min % 60:02d}")
-            self._actualizar_todas_periodos()
+            if self._debounce_after_id:
+                self.ventana.after_cancel(self._debounce_after_id)
+            self._debounce_after_id = self.ventana.after(1000, self._actualizar_todas_periodos)
 
         btn_menos = ttk.Button(f, text="-", width=3, command=lambda: ajustar(-30))
         btn_menos.pack(side='left')
@@ -1051,27 +1063,47 @@ class VentanaGestion:
                             periods_map[clave]["dias"].append(dia_nombre)
 
                     cur.execute(
-                        "SELECT a.materia_id, a.grupo_id, a.hora_inicio, a.hora_fin, a.modalidad, a.periodo FROM asignaciones a WHERE a.profesor_id = %s AND a.estado != 'cancelada' AND a.hora_inicio IS NOT NULL",
+                        "SELECT a.asignacion_id, a.materia_id, a.grupo_id, a.hora_inicio, a.hora_fin, a.modalidad, a.periodo, a.estado FROM asignaciones a WHERE a.profesor_id = %s AND a.estado != 'cancelada' AND a.hora_inicio IS NOT NULL",
                         (prof_id,)
                     )
                     for row in cur.fetchall():
-                        m_id, g_id, hi, hf, modal, periodo = row
+                        asig_id, m_id, g_id, hi, hf, modal, periodo, estado = row
                         hi_str = self._hora_db_a_str(hi)
                         hf_str = self._hora_db_a_str(hf)
                         modal_str = modal or "Presencial"
                         clave = f"{hi_str}-{hf_str}-{modal_str}"
                         if clave in periods_map:
-                            periods_map[clave]["asignaciones"].append({
+                            asignacion_data = {
                                 "materia_id": m_id,
                                 "grupo_id": str(g_id),
-                                "periodo": periodo or "A"
-                            })
+                                "periodo": periodo or "A",
+                                "estado": estado or "pendiente"
+                            }
+                            if estado == 'asignado':
+                                cur.execute(
+                                    "SELECT salon_id, dia, hora_inicio, hora_fin FROM horarios WHERE asignacion_id = %s",
+                                    (asig_id,)
+                                )
+                                horarios_list = []
+                                for h in cur.fetchall():
+                                    horarios_list.append({
+                                        "salon_id": h[0],
+                                        "dia": h[1],
+                                        "hora_inicio": self._hora_db_a_str(h[2]),
+                                        "hora_fin": self._hora_db_a_str(h[3])
+                                    })
+                                if horarios_list:
+                                    asignacion_data["horarios"] = horarios_list
+                            periods_map[clave]["asignaciones"].append(asignacion_data)
+
+                    # Solo guardar periodos que tengan al menos una asignacion
+                    periods_con_asignaciones = {k: v for k, v in periods_map.items() if v["asignaciones"]}
 
                     config["profesores"].append({
                         "profesor_id": prof_id,
                         "no_cuenta": no_cuenta,
                         "nombre": nombre,
-                        "periodos": list(periods_map.values())
+                        "periodos": list(periods_con_asignaciones.values())
                     })
 
                     self._progress_config["value"] = ((i + 1) / total) * 100
@@ -1080,9 +1112,111 @@ class VentanaGestion:
                 with open(filepath, 'w', encoding='utf-8') as f:
                     json.dump(config, f, indent=2, ensure_ascii=False)
 
-                messagebox.showinfo("Configuración", f"Configuración guardada para {total} profesor(es) en:\n{filepath}")
+                # Formatear BD: limpiar horarios, asignaciones y disponibilidad
+                print("[DEBUG GUARDAR] Formateando BD tras guardar config...")
+                cur.execute("TRUNCATE TABLE horarios")
+                cur.execute("DELETE FROM asignaciones")
+                cur.execute("DELETE FROM profesor_disponibilidad")
+                conn.commit()
+                print("[DEBUG GUARDAR] BD formateada correctamente")
+
+                self._ultimo_config_path = filepath
+                if self._profesor_id_seleccionado:
+                    self._cargar_periodos_desde_bd()
+                self.actualizar_vista_previa()
+                messagebox.showinfo("Configuración", f"Configuración guardada para {total} profesor(es) en:\n{filepath}\n\nBD formateada. Lista para nuevas asignaciones.")
         except Exception as e:
             messagebox.showerror("Error", f"Error al guardar configuración: {e}")
+        finally:
+            self._progress_config.pack_forget()
+
+    def _actualizar_configuracion(self):
+        if not self._ultimo_config_path or not os.path.exists(self._ultimo_config_path):
+            if not messagebox.askyesno("Sin archivo",
+                    "No hay un archivo de configuración previo.\n¿Deseas elegir una ubicación para guardar?"):
+                return
+            self._guardar_configuracion()
+            return
+        self._escribir_config_en(self._ultimo_config_path)
+
+    def _escribir_config_en(self, filepath):
+        self._progress_config.pack(side='left', padx=5)
+        self._progress_config["value"] = 0
+        self.ventana.update_idletasks()
+        try:
+            with obtener_cursor() as ctx:
+                if ctx is None:
+                    return
+                cur, conn = ctx
+                cur.execute("DELETE FROM profesor_disponibilidad WHERE dia NOT IN ('0','1','2','3','4','5','6')")
+                cur.execute("SELECT profesor_id, no_cuenta, nombre FROM profesores ORDER BY nombre")
+                prof_rows = cur.fetchall()
+                total = len(prof_rows)
+                config = {"version": 1, "profesores": []}
+                for i, (prof_id, no_cuenta, nombre) in enumerate(prof_rows):
+                    cur.execute(
+                        "SELECT dia, hora_inicio, hora_fin, modalidad FROM profesor_disponibilidad WHERE profesor_id = %s AND dia != '6' ORDER BY dia",
+                        (prof_id,)
+                    )
+                    disp_rows = cur.fetchall()
+                    periods_map = {}
+                    for dia, hi, hf, modal in disp_rows:
+                        hi_str = self._hora_db_a_str(hi)
+                        hf_str = self._hora_db_a_str(hf)
+                        modal_str = modal or "Presencial"
+                        clave = f"{hi_str}-{hf_str}-{modal_str}"
+                        if clave not in periods_map:
+                            periods_map[clave] = {
+                                "hora_i": hi_str, "hora_f": hf_str, "modalidad": modal_str,
+                                "dias": [], "asignaciones": []
+                            }
+                        dia_num = self._normalizar_dia(dia)
+                        dia_nombre = self.MAPA_DIAS.get(dia_num, dia_num)
+                        if dia_nombre not in periods_map[clave]["dias"]:
+                            periods_map[clave]["dias"].append(dia_nombre)
+                    cur.execute(
+                        "SELECT a.asignacion_id, a.materia_id, a.grupo_id, a.hora_inicio, a.hora_fin, a.modalidad, a.periodo, a.estado FROM asignaciones a WHERE a.profesor_id = %s AND a.estado != 'cancelada' AND a.hora_inicio IS NOT NULL",
+                        (prof_id,)
+                    )
+                    for row in cur.fetchall():
+                        asig_id, m_id, g_id, hi, hf, modal, periodo, estado = row
+                        hi_str = self._hora_db_a_str(hi)
+                        hf_str = self._hora_db_a_str(hf)
+                        modal_str = modal or "Presencial"
+                        clave = f"{hi_str}-{hf_str}-{modal_str}"
+                        if clave in periods_map:
+                            asignacion_data = {
+                                "materia_id": m_id, "grupo_id": str(g_id),
+                                "periodo": periodo or "A", "estado": estado or "pendiente"
+                            }
+                            if estado == 'asignado':
+                                cur.execute(
+                                    "SELECT salon_id, dia, hora_inicio, hora_fin FROM horarios WHERE asignacion_id = %s",
+                                    (asig_id,)
+                                )
+                                horarios_list = []
+                                for h in cur.fetchall():
+                                    horarios_list.append({
+                                        "salon_id": h[0], "dia": h[1],
+                                        "hora_inicio": self._hora_db_a_str(h[2]),
+                                        "hora_fin": self._hora_db_a_str(h[3])
+                                    })
+                                if horarios_list:
+                                    asignacion_data["horarios"] = horarios_list
+                            periods_map[clave]["asignaciones"].append(asignacion_data)
+                    periods_con_asignaciones = {k: v for k, v in periods_map.items() if v["asignaciones"]}
+                    config["profesores"].append({
+                        "profesor_id": prof_id, "no_cuenta": no_cuenta, "nombre": nombre,
+                        "periodos": list(periods_con_asignaciones.values())
+                    })
+                    self._progress_config["value"] = ((i + 1) / total) * 100
+                    self.ventana.update_idletasks()
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, indent=2, ensure_ascii=False)
+            self._ultimo_config_path = filepath
+            messagebox.showinfo("Configuración", f"Configuración actualizada en:\n{filepath}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al actualizar configuración: {e}")
         finally:
             self._progress_config.pack_forget()
 
@@ -1093,6 +1227,11 @@ class VentanaGestion:
         )
         if not filepath:
             return
+
+        if self._ultimo_config_path and os.path.exists(self._ultimo_config_path):
+            if messagebox.askyesno("Guardar cambios",
+                    "¿Desea guardar los cambios actuales en la configuración antes de cargar otro archivo?\n\nLos datos actuales se perderán si no los guarda."):
+                self._escribir_config_en(self._ultimo_config_path)
 
         if not messagebox.askyesno("Cargar Configuración",
                 "Se resetearán los periodos y asignaciones de todos los profesores.\nLos profesores no se eliminarán.\n¿Desea continuar?"):
@@ -1114,23 +1253,17 @@ class VentanaGestion:
                     return
                 cur, conn = ctx
 
-                print(f"[DEBUG CARGAR] ===== CARGANDO CONFIG ({total} profesores) =====")
+                print(f"[DEBUG CARGAR] ===== FORMATEANDO BD ({total} profesores) =====")
 
-                # Clean ALL corrupt dia values before loading
-                cur.execute("DELETE FROM profesor_disponibilidad WHERE dia NOT IN ('0','1','2','3','4','5','6')")
-                n_del = cur.rowcount
-                if n_del:
-                    print(f"[DEBUG CARGAR] Limpiadas {n_del} filas corruptas de disponibilidad")
+                cur.execute("TRUNCATE TABLE horarios")
+                cur.execute("DELETE FROM asignaciones")
+                cur.execute("DELETE FROM profesor_disponibilidad")
+                conn.commit()
+                print("[DEBUG CARGAR] BD formateada, cargando config...")
 
                 for i, prof in enumerate(profesores):
                     prof_id = prof["profesor_id"]
                     print(f"[DEBUG CARGAR] Procesando profesor {prof_id} ({prof.get('nombre','?')})")
-
-                    cur.execute("DELETE FROM profesor_disponibilidad WHERE profesor_id = %s", (prof_id,))
-                    cur.execute(
-                        "DELETE FROM asignaciones WHERE profesor_id = %s AND hora_inicio IS NOT NULL",
-                        (prof_id,)
-                    )
 
                     for periodo in prof.get("periodos", []):
                         hora_i = periodo["hora_i"]
@@ -1151,6 +1284,7 @@ class VentanaGestion:
                             mat_id = asig["materia_id"]
                             grupo_texto = asig["grupo_id"]
                             periodo_letra = asig.get("periodo", "A")
+                            estado = asig.get("estado", "pendiente")
                             grupo_id = self._obtener_id_valido(grupo_texto, es_grupo=True)
                             if not grupo_id:
                                 continue
@@ -1159,9 +1293,18 @@ class VentanaGestion:
                                 cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, 0)", (grupo_id,))
                             dias_str = ", ".join(dias)
                             cur.execute(
-                                "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado, periodo, hora_inicio, hora_fin, dias, modalidad) VALUES (%s, %s, %s, 'pendiente', %s, %s, %s, %s, %s)",
-                                (prof_id, mat_id, grupo_id, periodo_letra, hora_i, hora_f, dias_str, modalidad)
+                                "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado, periodo, hora_inicio, hora_fin, dias, modalidad) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                                (prof_id, mat_id, grupo_id, estado, periodo_letra, hora_i, hora_f, dias_str, modalidad)
                             )
+                            if estado == 'asignado':
+                                horarios_data = asig.get("horarios", [])
+                                if horarios_data:
+                                    nueva_asignacion_id = cur.lastrowid
+                                    for h in horarios_data:
+                                        cur.execute(
+                                            "INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin) VALUES (%s, %s, %s, %s, %s)",
+                                            (nueva_asignacion_id, h["salon_id"], h["dia"], h["hora_inicio"], h["hora_fin"])
+                                        )
 
                     conn.commit()
 
@@ -1170,7 +1313,9 @@ class VentanaGestion:
 
             if self._profesor_id_seleccionado:
                 self._cargar_periodos_desde_bd()
-            messagebox.showinfo("Configuración", f"Configuración cargada para {total} profesor(es)")
+            self.actualizar_vista_previa()
+            self._ultimo_config_path = filepath
+            messagebox.showinfo("Configuración", f"Configuración cargada para {total} profesor(es).\nBD formateada y datos cargados.")
         except Exception as e:
             messagebox.showerror("Error", f"Error al cargar configuración: {e}")
         finally:

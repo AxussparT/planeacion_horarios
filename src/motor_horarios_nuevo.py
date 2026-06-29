@@ -69,6 +69,7 @@ class GeneradorHorarios:
                    a.hora_inicio, a.hora_fin,
                    p.nombre as profesor_nombre,
                    a.modalidad,
+                   a.dias,
                    m.nombre as materia_nombre,
                    IFNULL(m.horas_semana, 4) as horas_semana,
                    IFNULL(m.tipo, 'Normal') as tipo_materia,
@@ -186,8 +187,16 @@ class GeneradorHorarios:
         duracion = asignacion['slot_duracion']
         slot_fin = slot_ini + duracion
 
+        dias_permitidos = None
+        raw_dias = asignacion.get('dias')
+        if raw_dias:
+            dias_permitidos = {self._normalizar_dia(d.strip()) for d in raw_dias.split(',')}
+
         dias_validos = []
         for p in asignacion.get('disponibilidad', []):
+            p_dia = p['dia']
+            if dias_permitidos and p_dia not in dias_permitidos:
+                continue
             p_ini = self._hora_a_slot(p['hora_inicio'])
             p_fin = self._hora_a_slot(p['hora_fin'])
             if slot_ini >= p_ini and slot_fin <= p_fin:
@@ -248,7 +257,7 @@ class GeneradorHorarios:
                 resultado.append(s)
             elif tipo_materia in ('tecnologica', 'tecnológica') and t in ('tecnologica', 'tecnológica'):
                 resultado.append(s)
-            elif tipo_materia == 'normal':
+            elif tipo_materia == 'normal' and t == 'normal':
                 resultado.append(s)
         return sorted(resultado, key=lambda s: self.uso_salones.get(s, 0))
 

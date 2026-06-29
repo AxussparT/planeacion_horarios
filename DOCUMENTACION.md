@@ -55,6 +55,7 @@ servicio_S/
 ├── arrancar.py                      # Punto de entrada
 ├── arrancar.spec                    # Configuración PyInstaller
 ├── DOCUMENTACION.md                 # Este archivo
+├── diagnostico_tabla.py             # Diagnóstico de encoding y estructura en BD
 ├── setup_bd.sql                     # Script completo de creación de BD (incluye columna dias)
 ├── migrar_disponibilidad.sql               # Migración de disponibilidad multi-periodo
 ├── migrar_grupos.sql                       # Migración: columna nivel en grupos + modalidad en asignaciones
@@ -68,7 +69,7 @@ servicio_S/
 │   ├── conexion.py                  # Conexión a MySQL
 │   ├── motor_horarios.py            # Algoritmo original de generación automática
 │   ├── motor_horarios_backup.py     # Backup exacto del motor original
-│   ├── motor_horarios_nuevo.py      # Motor actual: asigna salones con distr. por horas_semana
+│   ├── motor_horarios_nuevo.py      # Motor actual: asigna salones (1 sesión por día)
 │   ├── resp_motor.py                # (vacio - reservado)
 │   ├── clases/
 │   │   ├── __init__.py
@@ -253,19 +254,19 @@ class grupo:
 
 **Nota:** Este es el motor activo que reemplazó al original (`motor_horarios.py`).
 El usuario define los horarios (días y horas) al crear asignaciones con periodo fijo
-(`hora_inicio`, `hora_fin`). El motor asigna **salones** y **distribuye las
-sesiones** según `horas_semana` de la materia.
+(`hora_inicio`, `hora_fin`). El motor asigna **salones** — una sesión por día
+disponible, usando el horario exacto definido en la asignación.
 
 #### 6.9.1 Concepto de SLOT
 
-El día se divide en **30 slots** de 30 minutos cada uno, empezando a las 7:00 AM:
+El día se divide en **32 slots** de 30 minutos cada uno, empezando a las 7:00 AM:
 
 ```
 Slot  0 = 07:00
 Slot  1 = 07:30
 Slot  2 = 08:00
 ...
-Slot 29 = 21:30
+Slot 31 = 22:30
 ```
 
 Conversiones: `_hora_a_slot()` y `_slot_a_hora()`.
@@ -317,31 +318,19 @@ ejecutar(modo)
        ├── horas_totales = horas_semana de la materia
        ├── slot_inicio / slot_duracion desde hora_inicio / hora_fin
        │
-       ├── _dias_disponibles_para_horario(asignacion)
-       │   → Si asignacion['dias'] no es NULL, filtra solo esos días
-       │   → Luego cruza con profesor_disponibilidad para verificar que
-       │     [hora_inicio, hora_fin] quepa dentro del rango del profesor
-       │   → NULL en dias = backward compat (usa toda la disponibilidad)
+        ├── _dias_disponibles_para_horario(asignacion)
+        │   → Cruza con profesor_disponibilidad para verificar que
+        │     [hora_inicio, hora_fin] quepa dentro del rango del profesor
        │
        ├── _salones_compatibles(tipo_materia, es_mediacion)
        │
-       ├── _asignar_dias_a_salon(asignacion, dias, salon)
-       │   │
-       │   │  total_bloques = horas_semana × 2     (bloques de 30 min por semana)
-       │   │  session_blocks = slot_duracion        (ventana hora_inicio→hora_fin)
-       │   │  sessions_needed = total_bloques / session_blocks
-       │   │
-       │   │  Si sessions_needed < 1:
-       │   │    → La ventana es más grande de lo necesario
-       │   │    → session_blocks = max(ceil(total_bloques / num_dias), 4)
-       │   │    → Así cada sesión dura ~2h y se reparten entre los días
-       │   │
-       │   │  Por cada día disponible (y si caben varias, apiladas):
-       │   │    mientras quepan sesiones en la ventana:
-       │   │      crear horario en ese día
-       │   │      avanzar slot_inicio + session_blocks
-       │   │
-       │   └── Devuelve cantidad de bloques asignados (>0 = éxito)
+        ├── _asignar_dias_a_salon(asignacion, dias, salon)
+        │   │
+        │   │  Por cada día disponible:
+        │   │    verificar si el salón está libre en [slot_inicio, slot_fin]
+        │   │    si está libre → crear horario en ese día
+        │   │
+        │   └── Devuelve cantidad de días asignados (>0 = éxito)
        │
        ├── [SALÓN PREFERIDO (optimización)]:
        │   Si el par (profesor_id, materia_id) ya tiene un salón asignado
@@ -372,20 +361,9 @@ universidad entre clases.
 3. Si está ocupado en alguno de los días/horarios, se prueba con otros salones
    y el caché se actualiza
 
-#### 6.9.7 Cálculo de sesiones
+#### 6.9.7 Asignación por día
 
-El motor determina automáticamente cuántas sesiones semanales crear:
-
-| Dato                          | Origen                    | Ejemplo               |
-|-------------------------------|---------------------------|-----------------------|
-| `horas_semana`                | Tabla `materias`          | 4 h/semana            |
-| `slot_duracion`               | `hora_fin − hora_inicio`  | 6h (ventana 7–13)     |
-| `total_bloques`               | `horas_semana × 2`        | 8 bloques             |
-| `num_dias`                    | Disponibilidad profesor   | 2 días (Lun, Mié)     |
-| `session_blocks` (final)      | `total_bloques / num_dias`| 4 bloques = 2h        |
-
-Si `session_blocks` inicial (la ventana) da menos de 1 sesión, se recalcula
-distribuyendo `total_bloques / num_dias`, con un mínimo de 4 bloques (2h).
+El motor ya no distribuye sesiones según `horas_semana`. Por cada asignación, asigna **una sesión por día disponible** usando el horario exacto (`hora_inicio` → `hora_fin`) definido en la asignación. Cada día donde el salón y profesor estén libres recibe una entrada en la tabla `horarios`.
 
 #### 6.9.8 Detección de conflictos entre asignaciones del mismo profesor
 
@@ -1131,20 +1109,113 @@ la regla que obliga a que una clase en línea comience 2.5h después de la
   - Si no caben todas, se dejan como están (se detectarán como conflicto).
 - Se ejecuta en `ejecutar()` **antes** de `_detectar_conflictos()`, para que las asignaciones distribuidas tengan slots distintos y no se marquen como conflicto.
 
-### 11.33 Guardar/Cargar configuración de periodos (2026-06-28)
+### 11.33 Guardar/Cargar configuración de periodos (2026-06-28, actualizado 2026-06-28)
 
 **Archivo:** `src/UI/ventana_gestion.py`
 
-- Botones **"Guardar Config"** y **"Cargar Config"** en la barra de filtros, junto al botón "Iniciar Asignaciones de Aula".
-- **Guardar (`_guardar_configuracion`):**
-  - Consulta todos los profesores, sus periodos (`profesor_disponibilidad`) y asignaciones (`asignaciones`).
+Tres botones en la barra de filtros:
+
+- **Guardar Config (`_guardar_configuracion`):**
+  - Consulta todos los profesores, sus periodos (`profesor_disponibilidad`) y asignaciones (`asignaciones`), incluyendo horarios si están asignadas.
   - Agrupa por horario y modalidad.
-  - Guarda en archivo JSON con estructura: `{version, profesores: [{profesor_id, no_cuenta, nombre, periodos: [{hora_i, hora_f, modalidad, dias, asignaciones: [{materia_id, grupo_id, periodo}]}]}]}`.
+  - Guarda en archivo JSON con estructura: `{version, profesores: [{profesor_id, no_cuenta, nombre, periodos: [{hora_i, hora_f, modalidad, dias, asignaciones: [{materia_id, grupo_id, periodo, estado, horarios: [...]}]}]}]}`.
   - Barra de progreso mientras se procesan los profesores.
-- **Cargar (`_cargar_configuracion`):**
-  - Lee el archivo JSON.
-  - Confirma con el usuario que se resetearán los periodos (sin eliminar profesores).
-  - Por cada profesor: elimina `profesor_disponibilidad` y `asignaciones` existentes, inserta los datos guardados, crea grupos si no existen.
-  - Al finalizar, refresca la UI del profesor actual.
-  - Barra de progreso durante la operación.
+  - Al terminar, **formatea la BD**: `TRUNCATE TABLE horarios`, `DELETE FROM asignaciones`, `DELETE FROM profesor_disponibilidad`. Deja la BD limpia y lista para nuevas asignaciones.
+
+- **Actualizar Config (`_actualizar_configuracion`):**
+  - Sobrescribe el archivo JSON actual (`_ultimo_config_path`) con el estado actual de la BD.
+  - **No modifica la BD** — solo actualiza el archivo de configuración.
+  - Si no hay un archivo previo, pregunta si desea elegir una ubicación (equivalent to Guardar Config).
+
+- **Cargar Config (`_cargar_configuracion`):**
+  - Primero pregunta: "¿Desea guardar los cambios actuales antes de cargar?".
+  - Si acepta, guarda el estado actual en el JSON existente via `_escribir_config_en()`.
+  - Luego pregunta confirmación de carga.
+  - **Formatea la BD**: `TRUNCATE TABLE horarios`, `DELETE FROM asignaciones`, `DELETE FROM profesor_disponibilidad`.
+  - Lee el archivo JSON seleccionado e inserta disponibilidad y asignaciones en BD.
+  - Crea grupos automáticamente si no existen.
+  - Restaura horarios de asignaciones con estado `'asignado'`.
+  - Refresca la vista previa y la UI del profesor actual.
+  - Barra de progreso durante toda la operación.
 - Método auxiliar `_hora_db_a_str(h)` — formatea correctamente valores `datetime.time` y `datetime.timedelta` a `"HH:MM"`.
+
+### 11.34 Normalización robusta de días con unicodedata (2026-06-28)
+
+**Archivos:** `src/motor_horarios_nuevo.py`, `src/clases/memoria_Horario_Grafico.py`, `src/UI/ventana_gestion.py`
+
+Se reemplazaron los mapas fijos de días por una función `_normalizar_dia()` que usa `unicodedata.normalize('NFKD')` para eliminar acentos y aceptar tanto nombres completos como valores numéricos:
+
+```python
+s = unicodedata.normalize('NFKD', str(valor)).encode('ascii', 'ignore').decode('ascii').strip().lower()
+mapa = {"lunes": "0", "martes": "1", "miercoles": "2", "jueves": "3", "viernes": "4", "sabado": "5", "domingo": "6"}
+```
+
+Esto corrige problemas con datos corruptos (`"Miércoles"`, `"Miercoles"`, `"Sábado"`, `"Sabado"`). Ahora cualquier variación se normaliza al número de día.
+
+**Limpieza automática de datos corruptos:**
+- `_cargar_periodos_desde_bd()`: ejecuta `DELETE FROM profesor_disponibilidad WHERE dia NOT IN ('0','1','2','3','4','5','6')`.
+- `_guardar_configuracion()`: limpia datos corruptos antes de exportar JSON.
+- `iniciar_asignacion_automatica()`: limpia datos corruptos antes de ejecutar el motor.
+
+### 11.35 Extensión de slots diarios a 32 (2026-06-28)
+
+**Archivos:** `src/motor_horarios_nuevo.py`, `src/motor_horarios.py`
+
+`SLOTS_DIARIOS` aumentó de **30 a 32**, extendiendo el rango de 07:00–22:00 a **07:00–23:00**. Permite que asignaciones hasta las 22:30–23:00 sean procesadas.
+
+### 11.36 Simplificación de asignación en motor (2026-06-28)
+
+**Archivo:** `src/motor_horarios_nuevo.py`
+
+`_asignar_dias_a_salon()` se simplificó eliminando la lógica de distribución por `horas_semana`.
+
+**Antes:** Calculaba `total_bloques = horas_semana × 2`, `session_blocks`, `sessions_needed`, y distribuía múltiples sesiones por día.
+
+**Ahora:** Asigna **una sesión por día disponible**, usando `slot_inicio` y `slot_duracion` directamente. No hay redistribución — el motor verifica si el salón está libre en el horario exacto.
+
+Además:
+- Se eliminó `a.dias` del SELECT en `cargar_datos()`.
+- Se eliminó el filtro `dias_permitidos` en `_dias_disponibles_para_horario()` — los días dependen exclusivamente de `profesor_disponibilidad`.
+- Debug logging extensivo.
+
+### 11.37 Script de diagnóstico de base de datos (2026-06-28)
+
+**Archivo:** `diagnostico_tabla.py`
+
+Nuevo script para diagnosticar problemas de encoding en la BD:
+
+```bash
+python diagnostico_tabla.py
+```
+
+Muestra: estructura de `horarios`, triggers, columnas con tipos, datos actuales con `HEX(dia)`, inserción de prueba, y consulta de `profesor_disponibilidad` con hex.
+
+### 11.38 Columna `dias` en setup_bd.sql (2026-06-28)
+
+**Archivo:** `setup_bd.sql`
+
+Se agregó `ALTER TABLE asignaciones ADD COLUMN dias VARCHAR(50) DEFAULT NULL` al final del script para nuevas instalaciones.
+
+### 11.39 Debug logging extensivo (2026-06-28)
+
+**Archivos:** `src/motor_horarios_nuevo.py`, `src/UI/ventana_gestion.py`
+
+Se agregaron prints de depuración con prefijo `[DEBUG MOTOR]`, `[DEBUG ASIGNACION]` y `[DEBUG GUARDAR]` para trazabilidad de:
+- Carga de asignaciones y disponibilidad.
+- Conversión de días normalizados.
+- Procesamiento de cada asignación en el bucle principal.
+- Inserción y verificación de horarios en BD.
+- Limpieza de datos corruptos.
+- Errores con traceback completo.
+
+### 11.40 Debounce en spinners de hora para evitar lag (2026-06-28)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+Los botones +/- y teclas ←/→ de los spinners de hora (`_crear_spinner_hora`) llamaban a `_actualizar_todas_periodos()` en cada pulsación, ejecutando consultas DB y recalculando todas las alertas/horas en tiempo real, lo que causaba retardo y congelamiento al presionar repetidamente.
+
+**Solución:** Se agregó un mecanismo de **debounce** de 1 segundo:
+- `self._debounce_after_id` almacena el identificador del `after()` pendiente.
+- En `ajustar()`, cada pulsación **cancela** cualquier `after()` previo y **programa** una nueva llamada a `_actualizar_todas_periodos()` para 1 segundo después.
+- Solo la **última pulsación** en una ráfaga dispara la actualización real, cuando el usuario deja de presionar por 1 segundo.
+- Las llamadas directas a `_actualizar_todas_periodos()` desde otros puntos (crear periodo, cambiar combo) siguen siendo inmediatas.
