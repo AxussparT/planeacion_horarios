@@ -6,7 +6,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),
-        ('src/UI/logo ph.png', 'src/UI'),
+        ('src/UI/SAGA.png', 'src/UI'),
         ('config_default.json', '.'),
     ],
     hiddenimports=[
@@ -31,6 +31,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='arrancar',
+    icon='src/UI/SAGA.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

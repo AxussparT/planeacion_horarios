@@ -21,7 +21,7 @@ class SetupDialog:
         self.root.geometry("480x350")
         self.root.resizable(False, False)
         try:
-            ruta_icono = ruta_recurso('src/UI/logo ph.png')
+            ruta_icono = ruta_recurso('src/UI/SAGA.png')
             icono = tk.PhotoImage(file=ruta_icono)
             self.root.iconphoto(True, icono)
         except Exception:
@@ -110,7 +110,7 @@ if __name__ == "__main__":
 
     root = tk.Tk()
     try:
-        ruta_icono = ruta_recurso('src/UI/logo ph.png')
+        ruta_icono = ruta_recurso('src/UI/SAGA.png')
         icono = tk.PhotoImage(file=ruta_icono)
         root.iconphoto(True, icono)
     except Exception as e:
