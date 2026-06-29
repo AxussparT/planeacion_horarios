@@ -961,9 +961,69 @@ class VentanaGestion:
                     ):
                         continue
 
-                self._guardar_disponibilidad_periodo(self._profesor_id_seleccionado, hora_i, hora_f, dias_sel, modalidad_var.get(), wd.get('db_hora_i', ''), wd.get('db_hora_f', ''))
+                minutos_por_dia = (
+                    int(hora_f.split(':')[0]) * 60 + int(hora_f.split(':')[1]) -
+                    int(hora_i.split(':')[0]) * 60 - int(hora_i.split(':')[1])
+                )
+                horas_por_dia = minutos_por_dia / 60.0
+                horas_cubiertas = len(dias_sel) * horas_por_dia
+                accion = "normal"
+                dias_extra = []
+                if horas_cubiertas < hrs_mat:
+                    faltantes = hrs_mat - horas_cubiertas
+                    import tkinter.simpledialog as simpledialog
+                    opcion = messagebox.askyesnocancel(
+                        "Horas insuficientes",
+                        f"'{materia_txt}' requiere {hrs_mat:.1f}h pero el periodo actual cubre "
+                        f"{horas_cubiertas:.1f}h ({len(dias_sel)} día(s)"
+                        f" × {horas_por_dia:.1f}h/día).\n\n"
+                        f"Faltan {faltantes:.1f}h.\n\n"
+                        "• Sí: Agregar días adicionales para completar las horas\n"
+                        "• No: No asignar nada\n"
+                        "• Cancelar: Asignar de todas formas (sin completar horas)"
+                    )
+                    if opcion is False:
+                        continue
+                    elif opcion is True:
+                        dias_extra_str = simpledialog.askstring(
+                            "Completar horas",
+                            f"Faltan {faltantes:.1f}h. Ingresa días adicionales (separados por coma).\n"
+                            f"Ejemplo: Miércoles, Viernes\n"
+                            f"Horario: {hora_i} - {hora_f}"
+                        )
+                        if not dias_extra_str:
+                            continue
+                        dias_extra = [d.strip() for d in dias_extra_str.split(',') if d.strip()]
+                        if not dias_extra:
+                            continue
+                        accion = "completar"
+
+                todos_dias = dias_sel + dias_extra
+                self._guardar_disponibilidad_periodo(
+                    self._profesor_id_seleccionado, hora_i, hora_f,
+                    todos_dias, modalidad_var.get(),
+                    wd.get('db_hora_i', ''), wd.get('db_hora_f', '')
+                )
                 dias_str = ", ".join(dias_sel)
-                self._asignar_periodo(self._profesor_id_seleccionado, mat_id, grupo_id, periodo or "A", hora_i, hora_f, modalidad_var.get(), dias_str)
+                self._asignar_periodo(
+                    self._profesor_id_seleccionado, mat_id, grupo_id,
+                    periodo or "A", hora_i, hora_f, modalidad_var.get(), dias_str
+                )
+                if accion == "completar":
+                    dias_str_extra = ", ".join(dias_extra)
+                    with obtener_cursor() as ctx2:
+                        if ctx2:
+                            cur2, conn2 = ctx2
+                            grupo_id2 = self.obtener_o_crear_grupo(
+                                grupo_txt.strip().upper(),
+                                nivel=self.materias_map.get(mat_id)
+                            )
+                            if grupo_id2:
+                                cur2.execute(
+                                    "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado, periodo, hora_inicio, hora_fin, dias, modalidad) VALUES (%s, %s, %s, 'pendiente', %s, %s, %s, %s, %s)",
+                                    (self._profesor_id_seleccionado, mat_id, grupo_id2, periodo or "A", hora_i, hora_f, dias_str_extra, modalidad_var.get())
+                                )
+                                conn2.commit()
                 alguna_guardada = True
 
             if alguna_guardada:
@@ -1622,7 +1682,10 @@ class VentanaGestion:
 
                 self.actualizar_vista_previa()
 
-                lista_sem = list(self.semestres_map.values())
+                if self._semestres_filtrados:
+                    lista_sem = [v for k, v in self.semestres_map.items() if int(k) in self._semestres_filtrados]
+                else:
+                    lista_sem = list(self.semestres_map.values())
                 self.combo_filtro_semestre['values'] = lista_sem
                 if lista_sem and not self.combo_filtro_semestre.get():
                     self.combo_filtro_semestre.set(lista_sem[0])

@@ -182,18 +182,6 @@ class VentanaPrincipal:
         ttk.Button(f_btns_grupo, text="Agregar Grupo", command=self.evento_grupos, style='Danger.TButton').grid(row=0, column=0, padx=4)
         ttk.Button(f_btns_grupo, text="Eliminar", command=self.eliminar_grupo, style='Danger.TButton').grid(row=0, column=1, padx=4)
 
-        # ===== BOTÓN ASIGNAR SALONES =====
-        ttk.Separator(self.frame_izquierdo_principal, orient='horizontal').pack(fill='x', pady=15)
-        f_asig = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
-        f_asig.pack(fill='x', padx=25, pady=(5, 20))
-        f_asig.columnconfigure(0, weight=1)
-        ttk.Button(
-            f_asig,
-            text="EMPEZAR ASIGNACIONES DE AULA",
-            command=self._iniciar_asignacion_aula,
-            style='Danger.TButton'
-        ).grid(row=0, column=0, sticky='ew', ipady=8)
-
         self.tab_gestion = ttk.Frame(self.notebook, style='blue.TFrame')
         self.notebook.add(self.tab_gestion, text='Gestión')
         self._gestion_control = VentanaGestion(parent_frame=self.tab_gestion)
@@ -715,11 +703,6 @@ class VentanaPrincipal:
         self.mostrar_datos_salones()
         self.mostrar_datos_grupos()
         self.master.after(10, self._gestion_control.cargar_combos_bd)
-
-    # =================== ASIGNACIÓN DE AULAS ===================
-
-    def _iniciar_asignacion_aula(self):
-        self._gestion_control.iniciar_asignacion_automatica()
 
     # =================== ESCALADO ===================
 
