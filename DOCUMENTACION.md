@@ -1234,3 +1234,30 @@ Se detectó que `_normalizar_dia()` devolvía valores numéricos (`"0"`, `"1"`, 
 - `dias_permitidos` en `_dias_disponibles_para_horario()` también se normaliza a nombres en español, garantizando que la comparación con `p['dia']` sea correcta.
 
 **Nota:** `profesor_disponibilidad.dia` sigue almacenando valores numéricos (según la convención existente en el UI); la conversión ocurre al cargar los datos en el motor.
+
+### 11.42 Validación de `dia` en carga de configuración (2026-06-28)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+Al cargar un JSON de configuración guardado desde una versión anterior del motor, el campo `h["dia"]` de los horarios podía contener valores corruptos (vacíos, numéricos, o nombres desplazados). Estos se insertaban directamente en `horarios.dia` y MySQL en modo estricto los rechazaba con error *"Data truncated for column 'dia'"*.
+
+**Solución:** En `_cargar_configuracion()`, antes de insertar en `horarios`, se normaliza `h["dia"]` mediante `_normalizar_dia()` + `MAPA_DIAS.get(..., "Lunes")` para convertirlo siempre a un nombre de día en español válido.
+
+### 11.43 Detección interactiva de conflictos de grupo en el motor (2026-06-28)
+
+**Archivo:** `src/motor_horarios_nuevo.py`
+
+Se agregó un **fase de pre-detección** al inicio de `ejecutar()` que identifica asignaciones del **mismo grupo** cuyos horarios (días y horas) se sobreponen. En lugar de que el algoritmo greedy asigne ciegamente la primera y la segunda falle, ahora:
+
+1. **`_detectar_conflictos_grupo()`**: Agrupa las asignaciones por `grupo_id`, construye un grafo de conflictos por superposición de día/horario, y extrae componentes conectados. Cada componente genera una alerta de tipo `tipo == 'conflicto'`.
+2. Las asignaciones en conflicto se **remueven del procesamiento automático** para que ninguna se asigne sin intervención del usuario.
+3. **`_generar_alternativas()`**: Para cada asignación en conflicto, busca slots alternativos dentro de la disponibilidad del profesor y los días configurados, que **no choquen** con las otras asignaciones del mismo grupo. Devuelve hasta 3 sugerencias.
+4. **`_crear_alerta_conflicto()`**: Construye la alerta con la estructura que la UI ya espera (`conflictos` y `alternativas`).
+
+**Interfaz de usuario:** La pestaña **Alertas** ya tenía la infraestructura completa para manejar `tipo == 'conflicto'` (radio buttons, panel de resolución, sugerencias). El usuario puede:
+- Ver qué materias del mismo grupo tienen horarios que chocan.
+- Seleccionar qué materia conserva su horario actual.
+- La materia no seleccionada recibe automáticamente el primer horario alternativo sugerido.
+- El profesor y salón se actualizan consistentemente.
+
+**Ejemplo:** Si `Algorítmica` (Lun/Mié 10:30–12:30) y `Física` (Lun/Mié 11:00–13:00) comparten el grupo `S1`, el motor emite una alerta de conflicto en lugar de asignar solo una. El usuario elige cuál mantener y la otra recibe una sugerencia (ej. `Física` → `Lun/Mié 13:00–15:00`).
