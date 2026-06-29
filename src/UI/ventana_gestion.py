@@ -1301,9 +1301,11 @@ class VentanaGestion:
                                 if horarios_data:
                                     nueva_asignacion_id = cur.lastrowid
                                     for h in horarios_data:
+                                        dia_num = self._normalizar_dia(h["dia"])
+                                        dia_nombre = self.MAPA_DIAS.get(dia_num, "Lunes")
                                         cur.execute(
                                             "INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin) VALUES (%s, %s, %s, %s, %s)",
-                                            (nueva_asignacion_id, h["salon_id"], h["dia"], h["hora_inicio"], h["hora_fin"])
+                                            (nueva_asignacion_id, h["salon_id"], dia_nombre, h["hora_inicio"], h["hora_fin"])
                                         )
 
                     conn.commit()
