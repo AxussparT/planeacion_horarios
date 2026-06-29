@@ -4,11 +4,15 @@ import math
 import unicodedata
 
 class GeneradorHorarios:
+    MAPA_NUM_A_DIA = {"0": "Lunes", "1": "Martes", "2": "Miércoles", "3": "Jueves", "4": "Viernes", "5": "Sábado", "6": "Domingo"}
+
     @staticmethod
     def _normalizar_dia(valor):
         s = unicodedata.normalize('NFKD', str(valor)).encode('ascii', 'ignore').decode('ascii').strip().lower()
-        mapa = {"lunes": "0", "martes": "1", "miercoles": "2", "jueves": "3", "viernes": "4", "sabado": "5", "domingo": "6"}
-        return mapa.get(s, str(valor).strip())
+        mapa = {"lunes": "Lunes", "martes": "Martes", "miercoles": "Miércoles", "jueves": "Jueves", "viernes": "Viernes", "sabado": "Sábado", "domingo": "Domingo"}
+        if s in mapa:
+            return mapa[s]
+        return GeneradorHorarios.MAPA_NUM_A_DIA.get(str(valor).strip(), str(valor).strip())
 
     def __init__(self, conexion):
         self.conexion = conexion

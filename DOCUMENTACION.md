@@ -1143,14 +1143,14 @@ Tres botones en la barra de filtros:
 
 **Archivos:** `src/motor_horarios_nuevo.py`, `src/clases/memoria_Horario_Grafico.py`, `src/UI/ventana_gestion.py`
 
-Se reemplazaron los mapas fijos de días por una función `_normalizar_dia()` que usa `unicodedata.normalize('NFKD')` para eliminar acentos y aceptar tanto nombres completos como valores numéricos:
+Se reemplazaron los mapas fijos de días por una función `_normalizar_dia()` que usa `unicodedata.normalize('NFKD')` para eliminar acentos y normalizar cualquier variación de nombre de día o valor numérico a **nombre en español** (`"Lunes"`, `"Martes"`, …, `"Sábado"`):
 
 ```python
-s = unicodedata.normalize('NFKD', str(valor)).encode('ascii', 'ignore').decode('ascii').strip().lower()
-mapa = {"lunes": "0", "martes": "1", "miercoles": "2", "jueves": "3", "viernes": "4", "sabado": "5", "domingo": "6"}
+mapa_nombre = {"lunes": "Lunes", "martes": "Martes", "miercoles": "Miércoles", …}
+MAPA_NUM_A_DIA = {"0": "Lunes", "1": "Martes", …, "5": "Sábado", "6": "Domingo"}
 ```
 
-Esto corrige problemas con datos corruptos (`"Miércoles"`, `"Miercoles"`, `"Sábado"`, `"Sabado"`). Ahora cualquier variación se normaliza al número de día.
+Esto corrige problemas con datos corruptos (`"Miércoles"`, `"Miercoles"`, `"Sábado"`, `"Sabado"`, o valores numéricos). Cualquier variación se normaliza al nombre canónico en español, que es el formato esperado por `memoria_Horario_Grafico.py` y la tabla `horarios`.
 
 **Limpieza automática de datos corruptos:**
 - `_cargar_periodos_desde_bd()`: ejecuta `DELETE FROM profesor_disponibilidad WHERE dia NOT IN ('0','1','2','3','4','5','6')`.
@@ -1219,3 +1219,18 @@ Los botones +/- y teclas ←/→ de los spinners de hora (`_crear_spinner_hora`)
 - En `ajustar()`, cada pulsación **cancela** cualquier `after()` previo y **programa** una nueva llamada a `_actualizar_todas_periodos()` para 1 segundo después.
 - Solo la **última pulsación** en una ráfaga dispara la actualización real, cuando el usuario deja de presionar por 1 segundo.
 - Las llamadas directas a `_actualizar_todas_periodos()` desde otros puntos (crear periodo, cambiar combo) siguen siendo inmediatas.
+
+### 11.41 Corrección de day‑shift por normalización numérica en horarios (2026-06-28)
+
+**Archivo:** `src/motor_horarios_nuevo.py`
+
+Se detectó que `_normalizar_dia()` devolvía valores numéricos (`"0"`, `"1"`, …, `"5"`) en el campo `dia` de los horarios generados, pero el sistema espera nombres en español. Esto provocaba un **day‑shift**: al insertarse en la columna `horarios.dia VARCHAR(15)`, el valor `"0"` se almacenaba como cadena vacía y los valores `"1"`–`"5"` se leían como si fueran índices desplazados (ej. `"1"` → `"Lunes"` en lugar de `"Martes"`).
+
+**Causa raíz:** La función `_normalizar_dia()` mapeaba los días limpios a su representación numérica (`"lunes"` → `"0"`, `"martes"` → `"1"`, etc.), pero el resto del sistema (memoria visual, tabla `horarios`) espera nombres completos en español.
+
+**Solución:**
+- `MAPA_NUM_A_DIA` de clase: mapea `{"0": "Lunes", …, "5": "Sábado"}` para conversión de valores numéricos que no pasan por el mapa de nombres.
+- `_normalizar_dia()` ahora retorna nombres canónicos en español. Si el valor de entrada es un nombre (acentuado o no), se mapea directamente; si es numérico, se consulta `MAPA_NUM_A_DIA`.
+- `dias_permitidos` en `_dias_disponibles_para_horario()` también se normaliza a nombres en español, garantizando que la comparación con `p['dia']` sea correcta.
+
+**Nota:** `profesor_disponibilidad.dia` sigue almacenando valores numéricos (según la convención existente en el UI); la conversión ocurre al cargar los datos en el motor.
