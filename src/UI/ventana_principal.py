@@ -23,7 +23,7 @@ class VentanaPrincipal:
 
     def __init__(self, master):
         self.master = master
-        self.master.title("PLASEM - Control de Personal")
+        self.master.title("SAGA")
         self.master.state('zoomed')
         self.master.protocol("WM_DELETE_WINDOW", self._confirmar_cierre)
 

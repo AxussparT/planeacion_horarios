@@ -30,7 +30,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='arrancar',
+    name='SAGA',
     icon='src/UI/SAGA.ico',
     debug=False,
     bootloader_ignore_signals=False,
@@ -50,5 +50,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='arrancar',
+    name='SAGA',
 )
