@@ -1,12 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
     ['arrancar.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
-    hiddenimports=[],
+    datas=[
+        ('assets', 'assets'),
+        ('src/UI/logo ph.png', 'src/UI'),
+        ('config_default.json', '.'),
+    ],
+    hiddenimports=[
+        'mysql.connector',
+        'PIL',
+        'PIL._tkinter_finder',
+        'matplotlib',
+        'numpy',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
