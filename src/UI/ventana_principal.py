@@ -25,6 +25,7 @@ class VentanaPrincipal:
         self.master = master
         self.master.title("PLASEM - Control de Personal")
         self.master.state('zoomed')
+        self.master.protocol("WM_DELETE_WINDOW", self._confirmar_cierre)
 
         self.cache_profesores = []
         self.cache_materias = []
@@ -703,6 +704,20 @@ class VentanaPrincipal:
         self.mostrar_datos_salones()
         self.mostrar_datos_grupos()
         self.master.after(10, self._gestion_control.cargar_combos_bd)
+
+    def _confirmar_cierre(self):
+        resp = messagebox.askyesnocancel(
+            "Cerrar aplicación",
+            "¿Desea guardar la configuración en JSON antes de cerrar?"
+        )
+        if resp is None:
+            return
+        if resp:
+            if hasattr(self, '_gestion_control') and self._gestion_control:
+                ok = self._gestion_control._guardar_configuracion()
+                if not ok:
+                    return
+        self.master.destroy()
 
     # =================== ESCALADO ===================
 

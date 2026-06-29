@@ -1261,3 +1261,151 @@ Se agregó un **fase de pre-detección** al inicio de `ejecutar()` que identific
 - El profesor y salón se actualizan consistentemente.
 
 **Ejemplo:** Si `Algorítmica` (Lun/Mié 10:30–12:30) y `Física` (Lun/Mié 11:00–13:00) comparten el grupo `S1`, el motor emite una alerta de conflicto en lugar de asignar solo una. El usuario elige cuál mantener y la otra recibe una sugerencia (ej. `Física` → `Lun/Mié 13:00–15:00`).
+
+### 11.44 Eliminación de botón "EMPEZAR ASIGNACIONES DE AULA" duplicado (2026-06-29)
+
+**Archivo:** `src/UI/ventana_principal.py`
+
+Se eliminó el botón "EMPEZAR ASIGNACIONES DE AULA" y su separador visual (`ttk.Separator`) del panel izquierdo de la ventana principal (`ventana_principal.py`), junto con el método `_iniciar_asignacion_aula()` que quedó huérfano. La funcionalidad sigue disponible desde el botón "Iniciar Asignaciones de Aula" en la pestaña **Gestionar** de `ventana_gestion.py`.
+
+**Cambios:**
+- Se removieron las líneas que creaban el `ttk.Separator` y el `ttk.Button` en `self.frame_izquierdo_principal`, eliminando la duplicidad de entrada a la asignación automática.
+- Se eliminó el método `_iniciar_asignacion_aula` (~3 líneas) que ya no tenía ningún binding.
+
+### 11.45 Diálogo de cobertura de horas al guardar asignaciones (2026-06-29)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+Se agregó un **diálogo interactivo de 3 opciones** dentro de la función `guardar()` en `_agregar_periodo_asignacion()` que se activa cuando las horas del periodo seleccionado no cubren las horas semanales requeridas por la materia.
+
+**Cálculo de cobertura:**
+- Se parsea `hora_i` y `hora_f` con el mismo formato `split(':')` + `int()` que usa `_calcular_horas_con_ui()`.
+- Se valida `fin > ini` para evitar tiempos invertidos; si no, se usa 0 minutos.
+- Se excluye `Domingo` del conteo de días, consistente con el resto del sistema.
+- `horas_cubiertas = días_sin_domingo × minutos_por_dia / 60.0`.
+
+**Las 3 opciones del diálogo (`messagebox.askyesnocancel`):**
+| Botón | Retorno | Acción |
+|-------|---------|--------|
+| **Sí** | `True` | Abre un `simpledialog.askstring()` para que el usuario ingrese días adicionales (ej. `"Viernes, Sábado"`). Se guarda un segundo registro de asignación con esos días extras vía `INSERT` directo (sin pasar por `_asignar_periodo` para evitar el chequeo de duplicado). |
+| **No** | `False` | Omite la materia (`continue`), no se guarda ninguna asignación para ella. |
+| **Cancelar** | `None` | Asigna el periodo tal cual, sin completar las horas faltantes. |
+
+**Orden de ejecución:** El diálogo de cobertura se ejecuta **antes** del chequeo de sobrecarga de horas (`hrs_mat > restantes2`). Esto asegura que el usuario siempre vea las 3 opciones cuando el periodo no cubre las horas, independientemente de la disponibilidad total restante del profesor.
+
+**Guardado de días adicionales:** Cuando el usuario elige "Sí", se crea un segundo registro en `asignaciones` con los mismos `profesor_id`, `materia_id`, `grupo_id`, `periodo`, `hora_inicio`, `hora_fin`, `modalidad`, pero con los `dias` correspondientes a los días extras. La `profesor_disponibilidad` se actualiza con `_guardar_disponibilidad_periodo()` usando la unión de días originales + extras.
+
+### 11.46 Filtro de semestres por periodo en combos de gestión (2026-06-29)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+Se implementó el **filtrado automático del combobox de semestres** según el periodo seleccionado (A/B), tanto en la pestaña **Gestionar** como en la pestaña **Ver Horarios**.
+
+**Lógica de filtrado:**
+- Periodo **A** → semestres impares: `[1, 3, 5, 7, 9]`.
+- Periodo **B** → semestres pares: `[2, 4, 6, 8, 10]`.
+- La variable `self._semestres_filtrados` almacena la lista de semestres válidos.
+
+**Cambios realizados:**
+
+1. **`_cambiar_filtro_periodo()`** — ahora no solo actualiza `self._semestres_filtrados` y llama a `actualizar_vista_previa()`, sino que también re-puebla `combo_filtro_semestre` y `combo_filtro_semestre_vp` con la lista filtrada de semestres. Si el valor actual del combobox no está en la nueva lista, se selecciona el primer elemento.
+
+2. **`cargar_combos_bd()`** — al final de la función, si `combo_periodos` no tiene un valor seleccionado, se establece `"A"` como predeterminado y se invoca `_cambiar_filtro_periodo()`. Esto hace que el filtro funcione desde el primer momento sin necesidad de cambiar de pestaña.
+
+3. **`cargar_combos_bd()`** — la población inicial de `combo_filtro_semestre` y `combo_filtro_semestre_vp` ya respeta `self._semestres_filtrados` (si no está vacío, filtra; si no, muestra todos los semestres).
+
+**Comportamiento:** Al iniciar el sistema, el periodo por defecto es "A", y el combobox de semestres solo muestra `1 - Primer Semestre`, `3 - Tercer Semestre`, `5 - Quinto Semestre`, `7 - Séptimo Semestre`, `9 - Noveno Semestre`. Al cambiar el periodo a "B", el combobox se actualiza instantáneamente a los semestres pares.
+
+### 11.47 Eliminación del botón "+ Agregar Materia" y soporte de una sola materia por periodo (2026-06-29)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+Se eliminó la capacidad de agregar múltiples materias en un mismo periodo de asignación, debido a que el sistema no maneja correctamente la concurrencia de horarios cuando dos o más materias comparten el mismo bloque de tiempo.
+
+**Problema identificado:** Al asignar dos materias (ej. dos grupos de Programación) en un mismo periodo de 7:00–11:00, la primera materia ocupaba todo el bloque y la segunda se descartaba silenciosamente sin mostrar la alerta de conflicto horario. El motor de horarios no está diseñado para manejar múltiples materias dentro de un mismo periodo físico.
+
+**Cambios realizados:**
+1. Se eliminó el botón `ttk.Button(text="+ Agregar Materia")` y su posicionamiento en el grid.
+2. Se eliminó el `command` que conectaba el botón con `agregar_fila_asignacion()`.
+3. Se eliminó la reubicación del botón dentro de `agregar_fila_asignacion()` que movía el botón a la fila siguiente.
+4. Se eliminó la entrada `"btn_agregar_mat"` del diccionario `wd` (estructura de datos del periodo).
+5. Al cargar configuraciones existentes (`asignaciones_existentes`), solo se toma la primera materia (`[:1]`) ignorando las adicionales.
+
+**Efecto:** Cada periodo ahora contiene exactamente una fila Materia + Grupo, eliminando la posibilidad de conflictos internos y simplificando la interfaz.
+
+### 11.48 Confirmación de cierre con guardado opcional de JSON (2026-06-29)
+
+**Archivos:** `src/UI/ventana_principal.py`, `src/UI/ventana_gestion.py`
+
+Se agregó un **diálogo de confirmación al cerrar la aplicación** (click en la X) que pregunta si se desea guardar la configuración en JSON antes de salir, accesible desde cualquier pestaña.
+
+**Comportamiento:**
+
+| Acción del usuario | Resultado |
+|--------------------|-----------|
+| **Sí** | Se abre el diálogo "Guardar Configuración de Periodos" (`filedialog.asksaveasfilename`). Si el usuario selecciona una ubicación y completa el guardado, la aplicación se cierra. Si cancela el guardado, la aplicación permanece abierta. |
+| **No** | La aplicación se cierra inmediatamente sin guardar. |
+| **Cancelar** | No ocurre nada, la aplicación sigue abierta. |
+
+**Cambios realizados:**
+
+1. **`ventana_principal.py`**: Se registró `self.master.protocol("WM_DELETE_WINDOW", self._confirmar_cierre)` en el `__init__`. El nuevo método `_confirmar_cierre()` muestra un `messagebox.askyesnocancel` y, si la respuesta es "Sí", delega en `self._gestion_control._guardar_configuracion()`.
+
+2. **`ventana_gestion.py`**: La función `_guardar_configuracion()` ahora:
+   - Acepta un parámetro opcional `filepath`. Si se omite, abre el diálogo de archivo.
+   - Retorna `True` si el guardado fue exitoso, `False` si el usuario canceló o si ocurrió un error.
+   - Esto permite que el manejador de cierre sepa si debe proceder a cerrar la ventana o no.
+
+**Flujo de cierre con guardado:**
+```
+Usuario hace clic en X
+    → ¿Guardar configuración en JSON? (Sí/No/Cancelar)
+        → Sí: filedialog → ¿Seleccionó archivo?
+            → Sí: guarda JSON, formatea BD, → cierra app
+            → No: cancela, app sigue abierta
+        → No: cierra app inmediatamente
+        → Cancelar: no hace nada
+```
+
+### 11.49 Eliminación de periodos fantasma "07:00–07:00" al guardar JSON (2026-06-29)
+
+**Archivo:** `src/UI/ventana_gestion.py`
+
+Se corrigió un bug donde al guardar o actualizar un archivo JSON de configuración, aparecía un periodo vacío con horario `07:00–07:00` para cada profesor.
+
+**Causa:** La función `_cargar_periodos_desde_bd()` llamaba `_agregar_periodo_vacio()` cuando no encontraba registros en `profesor_disponibilidad` (porque el guardado trunca la tabla). Este método creaba una tarjeta de periodo con valores por defecto (`hora_i=07:00`, `hora_f=07:00`) sin días seleccionados.
+
+**Solución:**
+1. Se eliminó la llamada a `_agregar_periodo_vacio()` dentro de `_cargar_periodos_desde_bd()` — tanto en el flujo normal como en el manejador de excepciones.
+2. Se agregó un filtro en el agrupado de periodos para saltar filas donde `hora_inicio == hora_fin`, evitando que un eventual registro inválido `07:00–07:00` en la BD genere una tarjeta fantasma.
+
+**Efecto:** Al guardar JSON ya no se crean periodos vacíos automáticos. El usuario puede agregar periodos manualmente con el botón "+ Agregar Periodo".
+
+### 11.50 Sugerencias de horarios alternativos para materias no asignadas (2026-06-29)
+
+**Archivos:** `src/motor_horarios_nuevo.py`, `src/UI/ventana_gestion.py`
+
+Se implementó un sistema de **sugerencias de horarios alternativos** para las materias que el motor de horarios no pudo asignar automáticamente. Las sugerencias respetan los días de trabajo actuales del profesor y evitan choques con otras materias ya asignadas.
+
+**Problema original:** Cuando una materia no podía asignarse, la alerta solo mostraba sugerencias de texto genéricas ("Ampliar el horario del profesor o agregar más salones") sin ofrecer horarios concretos que el usuario pudiera aplicar.
+
+**Solución:**
+
+1. **Nuevo método `_generar_alternativas_para_no_asignada(asig)` en `motor_horarios_nuevo.py`:** Para cada materia no asignada, escanea la disponibilidad del profesor y los salones compatibles buscando slots libres que cumplan:
+   - El horario debe estar dentro de la disponibilidad del profesor.
+   - El salón debe ser compatible con el tipo de materia.
+   - El slot no debe chocar con otras materias ya asignadas al mismo profesor, grupo o salón (usando `es_posible_asignar()` y las matrices de ocupación).
+   - **Prioriza días donde el profesor ya trabaja** (según `ocupacion_profesores`), minimizando los días de traslado a la universidad.
+   - Retorna hasta 3 alternativas con día, hora_inicio, hora_fin y salón sugerido.
+
+2. **Modificación de `ejecutar()`:** Los tres puntos de fallo (sin disponibilidad, sin salones compatibles, todos los salones ocupados) ahora incluyen `"tipo": "no_asignada"` y `"alternativas"` en el dict de alerta, llamando a `_generar_alternativas_para_no_asignada()`.
+
+3. **Modificación de `_mostrar_detalle_normal()` en `ventana_gestion.py`:** El panel de detalle de alertas ahora muestra las alternativas sugeridas cuando existen:
+   ```
+   HORARIOS ALTERNATIVOS SUGERIDOS:
+     1. Lunes 09:00-11:00 (Salón: A-101)
+     2. Miércoles 07:00-09:00 (Salón: A-101)
+     3. Viernes 09:00-11:00 (Salón: A-102)
+   ```
+
+**Comportamiento:** Al ejecutar la asignación automática, si una materia no puede colocarse en su horario original, el sistema sugiere horarios alternativos concretos que respetan los días laborales del profesor y evitan choques con sus demás materias. El usuario puede revisar estas sugerencias en la pestaña **Alertas** y aplicarlas manualmente editando la asignación correspondiente.

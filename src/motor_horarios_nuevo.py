@@ -307,45 +307,79 @@ class GeneradorHorarios:
     def _generar_alternativas(self, asig, otros_conflictos):
         alternativas = []
         duracion = asig['slot_duracion']
-        dias_asig = set()
-        if asig.get('dias'):
-            for d in asig['dias'].split(','):
-                dias_asig.add(self._normalizar_dia(d.strip()))
-        if not dias_asig:
-            return alternativas
         tipo_materia = asig.get('tipo_materia', 'Normal').lower()
         es_mediacion = str(asig.get('modalidad', 'Presencial')) == 'Mediacion Tecnologica'
         salones = self._salones_compatibles(tipo_materia, es_mediacion)
         if not salones:
             return alternativas
-        for dia in dias_asig:
-            for p in asig.get('disponibilidad', []):
-                if p['dia'] != dia:
-                    continue
-                p_ini = self._hora_a_slot(p['hora_inicio'])
-                p_fin = self._hora_a_slot(p['hora_fin'])
+        for p in asig.get('disponibilidad', []):
+            dia = p['dia']
+            p_ini = self._hora_a_slot(p['hora_inicio'])
+            p_fin = self._hora_a_slot(p['hora_fin'])
+            for test_ini in range(p_ini, p_fin - duracion + 1):
+                test_fin = test_ini + duracion
+                conflicted = False
+                for otro in otros_conflictos:
+                    o_dias = set()
+                    if otro.get('dias'):
+                        for d in otro['dias'].split(','):
+                            o_dias.add(self._normalizar_dia(d.strip()))
+                    if dia in o_dias:
+                        o_ini = otro['slot_inicio']
+                        o_fin = o_ini + otro['slot_duracion']
+                        if test_ini < o_fin and o_ini < test_fin:
+                            conflicted = True
+                            break
+                if not conflicted:
+                    alternativas.append({
+                        "dia": dia,
+                        "hora_inicio": self._slot_a_hora(test_ini)[:5],
+                        "hora_fin": self._slot_a_hora(test_fin)[:5],
+                        "salon": salones[0]
+                    })
+                    if len(alternativas) >= 3:
+                        return alternativas
+        return alternativas[:3]
+
+    def _generar_alternativas_para_no_asignada(self, asig):
+        alternativas = []
+        duracion = asig['slot_duracion']
+        tipo_materia = asig.get('tipo_materia', 'Normal').lower()
+        es_mediacion = str(asig.get('modalidad', 'Presencial')) == 'Mediacion Tecnologica'
+        salones = self._salones_compatibles(tipo_materia, es_mediacion)
+        if not salones:
+            return alternativas
+
+        prof_id = asig['profesor_id']
+        dias_trabajados = set()
+        for (dia, pid, _slot) in self.ocupacion_profesores:
+            if pid == prof_id:
+                dias_trabajados.add(dia)
+
+        disponibilidad = asig.get('disponibilidad', [])
+        if not disponibilidad:
+            return alternativas
+
+        ORDEN_DIAS = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
+        disponibilidad_ordenada = sorted(disponibilidad,
+            key=lambda p: (0 if p['dia'] in dias_trabajados else 1, ORDEN_DIAS.get(p['dia'], 99)))
+
+        for p in disponibilidad_ordenada:
+            dia = p['dia']
+            p_ini = self._hora_a_slot(p['hora_inicio'])
+            p_fin = self._hora_a_slot(p['hora_fin'])
+            for salon in salones:
                 for test_ini in range(p_ini, p_fin - duracion + 1):
                     test_fin = test_ini + duracion
-                    conflicted = False
-                    for otro in otros_conflictos:
-                        o_dias = set()
-                        if otro.get('dias'):
-                            for d in otro['dias'].split(','):
-                                o_dias.add(self._normalizar_dia(d.strip()))
-                        if dia in o_dias:
-                            o_ini = otro['slot_inicio']
-                            o_fin = o_ini + otro['slot_duracion']
-                            if test_ini < o_fin and o_ini < test_fin:
-                                conflicted = True
-                                break
-                    if not conflicted:
+                    if self.es_posible_asignar(asig, dia, test_ini, duracion, salon):
                         alternativas.append({
                             "dia": dia,
                             "hora_inicio": self._slot_a_hora(test_ini)[:5],
                             "hora_fin": self._slot_a_hora(test_fin)[:5],
-                            "salon": salones[0]
+                            "salon": salon
                         })
-                        break
+                        if len(alternativas) >= 3:
+                            return alternativas
         return alternativas[:3]
 
     def _crear_alerta_conflicto(self, asigs_en_conflicto, alternativas):
@@ -427,6 +461,53 @@ class GeneradorHorarios:
             a.pop('_idx', None)
         return conflictos
 
+    def _detectar_conflictos_profesor(self):
+        from collections import defaultdict
+        profes = defaultdict(list)
+        for idx, a in enumerate(self.asignaciones):
+            a['_idx'] = idx
+            profes[a['profesor_id']].append(a)
+        conflictos = []
+        indices_a_remover = set()
+        for prof_id, asignaciones in profes.items():
+            n = len(asignaciones)
+            if n < 2:
+                continue
+            adyacencias = [[] for _ in range(n)]
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if self._tienen_conflicto_horario(asignaciones[i], asignaciones[j]):
+                        adyacencias[i].append(j)
+                        adyacencias[j].append(i)
+            visitados = [False] * n
+            for i in range(n):
+                if visitados[i]:
+                    continue
+                componente = []
+                stack = [i]
+                visitados[i] = True
+                while stack:
+                    v = stack.pop()
+                    componente.append(v)
+                    for u in adyacencias[v]:
+                        if not visitados[u]:
+                            visitados[u] = True
+                            stack.append(u)
+                if len(componente) > 1:
+                    asigs_conflicto = [asignaciones[idx] for idx in componente]
+                    alternativas = {}
+                    for a in asigs_conflicto:
+                        otros = [x for x in asigs_conflicto if x['asignacion_id'] != a['asignacion_id']]
+                        alternativas[a['asignacion_id']] = self._generar_alternativas(a, otros)
+                    alerta = self._crear_alerta_conflicto(asigs_conflicto, alternativas)
+                    conflictos.append(alerta)
+                    for a in asigs_conflicto:
+                        indices_a_remover.add(a['_idx'])
+        self.asignaciones = [a for i, a in enumerate(self.asignaciones) if i not in indices_a_remover]
+        for a in self.asignaciones:
+            a.pop('_idx', None)
+        return conflictos
+
     def ejecutar(self, modo="completo"):
         self.cargar_datos(modo)
         self._limpiar_matrices()
@@ -441,6 +522,11 @@ class GeneradorHorarios:
         alertas_generadas.extend(conflictos_detectados)
         if conflictos_detectados:
             print(f"\n[DEBUG MOTOR] *** {len(conflictos_detectados)} conflicto(s) de grupo detectado(s) y removido(s) del procesamiento automático")
+
+        conflictos_profesor = self._detectar_conflictos_profesor()
+        alertas_generadas.extend(conflictos_profesor)
+        if conflictos_profesor:
+            print(f"\n[DEBUG MOTOR] *** {len(conflictos_profesor)} conflicto(s) de profesor detectado(s) y removido(s) del procesamiento automático")
 
         print(f"[DEBUG MOTOR] ===== INICIANDO ASIGNACION ({modo}) =====")
         print(f"[DEBUG MOTOR] Total asignaciones a procesar: {len(self.asignaciones)}")
@@ -475,7 +561,8 @@ class GeneradorHorarios:
                 causas = ["El profesor no tiene disponibilidad en el horario requerido."]
                 sugerencias = ["Verificar que la disponibilidad del profesor cubra el horario de la asignación."]
                 detalles_extra = [f"Horario requerido: {self._slot_a_hora(slot_ini)[:5]}-{self._slot_a_hora(slot_ini+duracion)[:5]}"]
-                alerta = {"materia": mat_nombre.upper(), "materia_id": asignacion['materia_id'], "grupo": grupo_id, "profesor": prof_nombre.upper(), "profesor_id": asignacion['profesor_id'], "causas": causas, "sugerencias": sugerencias, "detalles_extra": detalles_extra}
+                alternativas = self._generar_alternativas_para_no_asignada(asignacion)
+                alerta = {"materia": mat_nombre.upper(), "materia_id": asignacion['materia_id'], "grupo": grupo_id, "profesor": prof_nombre.upper(), "profesor_id": asignacion['profesor_id'], "causas": causas, "sugerencias": sugerencias, "detalles_extra": detalles_extra, "tipo": "no_asignada", "alternativas": alternativas, "asignacion_id": asignacion['asignacion_id']}
                 alertas_generadas.append(alerta)
                 print(f"ALERTA: {mat_nombre} ({grupo_id}) - Sin disponibilidad del profesor para el horario requerido")
                 continue
@@ -484,7 +571,8 @@ class GeneradorHorarios:
                 causas = [f"No hay salones MEDIACION_TECNOLOGICA disponibles." if es_mediacion else f"No hay salones compatibles de tipo '{tipo_materia}'."]
                 sugerencias = ["Verificar que existan salones de tipo Mediacion Tecnologica." if es_mediacion else f"Registrar salones tipo '{tipo_materia}' o cambiar el tipo de la materia."]
                 detalles_extra = [f"Modalidad: {'Mediacion Tecnologica' if es_mediacion else 'Presencial'}, Tipo materia: {tipo_materia}"]
-                alerta = {"materia": mat_nombre.upper(), "materia_id": asignacion['materia_id'], "grupo": grupo_id, "profesor": prof_nombre.upper(), "profesor_id": asignacion['profesor_id'], "causas": causas, "sugerencias": sugerencias, "detalles_extra": detalles_extra}
+                alternativas = self._generar_alternativas_para_no_asignada(asignacion)
+                alerta = {"materia": mat_nombre.upper(), "materia_id": asignacion['materia_id'], "grupo": grupo_id, "profesor": prof_nombre.upper(), "profesor_id": asignacion['profesor_id'], "causas": causas, "sugerencias": sugerencias, "detalles_extra": detalles_extra, "tipo": "no_asignada", "alternativas": alternativas, "asignacion_id": asignacion['asignacion_id']}
                 alertas_generadas.append(alerta)
                 print(f"ALERTA: {mat_nombre} ({grupo_id}) - Sin salones compatibles ({'MT' if es_mediacion else tipo_materia})")
                 continue
@@ -546,15 +634,19 @@ class GeneradorHorarios:
                     if libres:
                         detalles_extra.append(f"Salones con espacio: {', '.join(libres[:3])}")
 
+                alternativas = self._generar_alternativas_para_no_asignada(asignacion)
                 alerta = {
+                    "tipo": "no_asignada",
                     "materia": mat_nombre.upper(),
                     "materia_id": asignacion['materia_id'],
                     "grupo": grupo_id,
                     "profesor": prof_nombre.upper(),
                     "profesor_id": asignacion['profesor_id'],
+                    "asignacion_id": asignacion['asignacion_id'],
                     "causas": causas,
                     "sugerencias": sugerencias[:3],
-                    "detalles_extra": detalles_extra
+                    "detalles_extra": detalles_extra,
+                    "alternativas": alternativas
                 }
                 alertas_generadas.append(alerta)
                 causa_corta = causas[0] if causas else "sin causa identificada"

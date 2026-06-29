@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, font, messagebox, filedialog
+from tkinter import ttk, font, messagebox, filedialog, simpledialog
 from PIL import Image, ImageTk
 import mysql.connector
 import datetime
@@ -603,6 +603,8 @@ class VentanaGestion:
                     dia_str = str(d)
                     if dia_str == "6":
                         continue
+                    if str(hi) == str(hf):
+                        continue
                     clave = f"{hi}-{hf}"
                     if clave not in agrupado:
                         agrupado[clave] = {"hora_i": str(hi), "hora_f": str(hf), "dias": set(), "modalidad": modal or "Presencial"}
@@ -618,11 +620,8 @@ class VentanaGestion:
                     mins = (fin - ini) if fin > ini else 0
                     info['db_minutos'] = mins * len(info['dias'])
                     self._agregar_periodo_asignacion(datos=info, horas_pre=(disponibles, asignadas), grupos_pre=todos_grupos, materias_pre=mat_ids)
-                if not filas:
-                    self._agregar_periodo_vacio(horas_pre=(disponibles, asignadas), grupos_pre=todos_grupos, materias_pre=mat_ids)
         except Exception as e:
             print(f"Error cargando disponibilidad: {e}")
-            self._agregar_periodo_vacio()
 
     def _actualizar_horas_info(self):
         if not self._profesor_id_seleccionado:
@@ -867,9 +866,6 @@ class VentanaGestion:
         else:
             mat_ids = self._materias_filtradas_actual() if self._profesor_id_seleccionado else []
 
-        btn_agregar_mat = ttk.Button(f_asig, text="+ Agregar Materia", command=lambda: None)
-        btn_agregar_mat.grid(row=1, column=0, columnspan=4, pady=2)
-
         def agregar_fila_asignacion(mat_inicial=None, grp_inicial=None):
             row = len(filas_asignacion)
             ttk.Label(f_asig, text="Materia:", background='#0A0F1E', foreground='white', font=self._fuente_label).grid(row=row, column=0, sticky='w', padx=2)
@@ -889,13 +885,10 @@ class VentanaGestion:
                 cg.set(grp_inicial)
 
             filas_asignacion.append((cm, cg))
-            btn_agregar_mat.grid(row=len(filas_asignacion), column=0, columnspan=4, pady=2)
-
-        btn_agregar_mat.config(command=agregar_fila_asignacion)
 
         asignaciones_existentes = datos.get('asignaciones', []) if datos else []
         if asignaciones_existentes:
-            for mat_id, grp_id in asignaciones_existentes:
+            for mat_id, grp_id in asignaciones_existentes[:1]:
                 agregar_fila_asignacion(mat_inicial=mat_id, grp_inicial=grp_id)
         else:
             agregar_fila_asignacion()
@@ -952,31 +945,28 @@ class VentanaGestion:
                     continue
 
                 hrs_mat = self._get_horas_materia(mat_id)
-                disponibles2, asignadas2 = self._calcular_horas_con_ui(self._profesor_id_seleccionado)
-                restantes2 = max(0, disponibles2 - asignadas2)
-                if hrs_mat > restantes2:
-                    if not messagebox.askyesno(
-                        "Sobrecarga de horas",
-                        f"'{materia_txt}' requiere {hrs_mat:.1f}h pero solo restan {restantes2:.1f}h.\n¿Asignar de todas formas?"
-                    ):
-                        continue
-
-                minutos_por_dia = (
-                    int(hora_f.split(':')[0]) * 60 + int(hora_f.split(':')[1]) -
-                    int(hora_i.split(':')[0]) * 60 - int(hora_i.split(':')[1])
-                )
-                horas_por_dia = minutos_por_dia / 60.0
-                horas_cubiertas = len(dias_sel) * horas_por_dia
+                try:
+                    parts_i = hora_i.split(':')
+                    parts_f = hora_f.split(':')
+                    ini = int(parts_i[0]) * 60 + int(parts_i[1])
+                    fin = int(parts_f[0]) * 60 + int(parts_f[1])
+                    if fin > ini:
+                        minutos_por_dia = fin - ini
+                    else:
+                        minutos_por_dia = 0
+                except (ValueError, IndexError):
+                    minutos_por_dia = 0
+                dias_sin_domingo = sum(1 for d in dias_sel if d != 'Domingo')
+                horas_cubiertas = dias_sin_domingo * minutos_por_dia / 60.0
                 accion = "normal"
                 dias_extra = []
                 if horas_cubiertas < hrs_mat:
                     faltantes = hrs_mat - horas_cubiertas
-                    import tkinter.simpledialog as simpledialog
                     opcion = messagebox.askyesnocancel(
                         "Horas insuficientes",
                         f"'{materia_txt}' requiere {hrs_mat:.1f}h pero el periodo actual cubre "
                         f"{horas_cubiertas:.1f}h ({len(dias_sel)} día(s)"
-                        f" × {horas_por_dia:.1f}h/día).\n\n"
+                        f" × {minutos_por_dia/60:.1f}h/día).\n\n"
                         f"Faltan {faltantes:.1f}h.\n\n"
                         "• Sí: Agregar días adicionales para completar las horas\n"
                         "• No: No asignar nada\n"
@@ -997,6 +987,15 @@ class VentanaGestion:
                         if not dias_extra:
                             continue
                         accion = "completar"
+
+                disponibles2, asignadas2 = self._calcular_horas_con_ui(self._profesor_id_seleccionado)
+                restantes2 = max(0, disponibles2 - asignadas2)
+                if hrs_mat > restantes2:
+                    if not messagebox.askyesno(
+                        "Sobrecarga de horas",
+                        f"'{materia_txt}' requiere {hrs_mat:.1f}h pero solo restan {restantes2:.1f}h.\n¿Asignar de todas formas?"
+                    ):
+                        continue
 
                 todos_dias = dias_sel + dias_extra
                 self._guardar_disponibilidad_periodo(
@@ -1041,7 +1040,6 @@ class VentanaGestion:
             "entry_f": entry_f,
             "vars_dias": vars_dias,
             "filas_asignacion": filas_asignacion,
-            "btn_agregar_mat": btn_agregar_mat,
             "modalidad_var": modalidad_var,
             "label_restante": label_restante,
             "db_minutos": datos.get('db_minutos', 0) if datos else 0,
@@ -1063,14 +1061,15 @@ class VentanaGestion:
         except (ValueError, IndexError):
             return s
 
-    def _guardar_configuracion(self):
-        filepath = filedialog.asksaveasfilename(
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json")],
-            title="Guardar Configuración de Periodos"
-        )
+    def _guardar_configuracion(self, filepath=None):
         if not filepath:
-            return
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json")],
+                title="Guardar Configuración de Periodos"
+            )
+            if not filepath:
+                return False
 
         self._progress_config.pack(side='left', padx=5)
         self._progress_config["value"] = 0
@@ -1079,7 +1078,7 @@ class VentanaGestion:
         try:
             with obtener_cursor() as ctx:
                 if ctx is None:
-                    return
+                    return False
                 cur, conn = ctx
 
                 # Clean ALL corrupt dia values before saving
@@ -1185,8 +1184,10 @@ class VentanaGestion:
                     self._cargar_periodos_desde_bd()
                 self.actualizar_vista_previa()
                 messagebox.showinfo("Configuración", f"Configuración guardada para {total} profesor(es) en:\n{filepath}\n\nBD formateada. Lista para nuevas asignaciones.")
+                return True
         except Exception as e:
             messagebox.showerror("Error", f"Error al guardar configuración: {e}")
+            return False
         finally:
             self._progress_config.pack_forget()
 
@@ -1692,6 +1693,10 @@ class VentanaGestion:
 
                 if hasattr(self, 'combo_filtro_semestre_vp'):
                     self.combo_filtro_semestre_vp['values'] = ["Todos"] + lista_sem
+
+                if not self.combo_periodos.get() and self.combo_periodos['values']:
+                    self.combo_periodos.set(self.combo_periodos['values'][0])
+                    self._cambiar_filtro_periodo()
             except mysql.connector.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error BD", f"Error cargando combos: {err}")
@@ -1866,6 +1871,11 @@ class VentanaGestion:
         texto += "\nSUGERENCIAS:\n"
         for i, s in enumerate(a.get('sugerencias', []), 1):
             texto += f"  {i}. {s}\n"
+        alternativas = a.get('alternativas', [])
+        if alternativas:
+            texto += "\nHORARIOS ALTERNATIVOS SUGERIDOS:\n"
+            for i, alt in enumerate(alternativas[:5], 1):
+                texto += f"  {i}. {alt['dia']} {alt['hora_inicio']}-{alt['hora_fin']} (Salón: {alt['salon']})\n"
         extras = a.get('detalles_extra', [])
         if extras:
             texto += "\nDETALLES TÉCNICOS:\n"
@@ -2007,6 +2017,8 @@ class VentanaGestion:
                     cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Laboratorio' OR tipo = 'Normal' LIMIT 1")
                 elif tipo_materia in ('tecnologica', 'tecnológica'):
                     cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Tecnologica' LIMIT 1")
+                elif tipo_materia == 'normal':
+                    cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Normal' LIMIT 1")
                 else:
                     cur.execute("SELECT salon_id FROM salones WHERE salon_id NOT LIKE 'MEDIACION_TECNOLOGICA%' LIMIT 1")
 
@@ -2106,6 +2118,13 @@ class VentanaGestion:
         self._periodo_seleccionado = periodo
         semestres_validos = [1, 3, 5, 7, 9] if periodo == "A" else [2, 4, 6, 8, 10]
         self._semestres_filtrados = semestres_validos
+        lista_sem = [v for k, v in self.semestres_map.items() if int(k) in semestres_validos]
+        if lista_sem:
+            self.combo_filtro_semestre['values'] = lista_sem
+            if self.combo_filtro_semestre.get() not in lista_sem:
+                self.combo_filtro_semestre.set(lista_sem[0])
+        if hasattr(self, 'combo_filtro_semestre_vp'):
+            self.combo_filtro_semestre_vp['values'] = ["Todos"] + lista_sem
         self.actualizar_vista_previa()
 
     def _materias_para_semestre(self, id_sem):
