@@ -1,23 +1,34 @@
 from src.conexion import get_conexion
 from tkinter import messagebox
-import mysql.connector
+import sqlite3
 
 def validar_y_registrar_materia(clave, nombre, horas_semana, semestre, tipo):
     print(f"Iniciando registro/actualización para: {clave} - {nombre} (Tipo: {tipo})...")
 
-    clave = str(clave).strip()
-    nombre = str(nombre).strip()
+    clave = str(clave).strip().upper()
+    nombre = str(nombre).strip().upper()
     horas_str = str(horas_semana).strip()
-    tipo = str(tipo).strip()
+    tipo = str(tipo).strip().upper()
     
-    semestre_id = int(semestre) if str(semestre).strip().isdigit() else None
+    semestre_str = str(semestre or "").strip()
+    if semestre_str and (
+        not semestre_str.isascii()
+        or not semestre_str.isdigit()
+        or len(semestre_str) > 2
+    ):
+        messagebox.showerror("Error de Datos", "El semestre debe ser un número entero de hasta 2 dígitos.")
+        return False
+    semestre_id = int(semestre_str) if semestre_str else None
     
     if not clave or not nombre or not tipo:
         messagebox.showerror("Error de Datos", "La clave, el nombre y el tipo de materia son obligatorios.")
         return False
     
-    if not horas_str.replace('.', '', 1).isdigit():
-        messagebox.showerror("Error de Datos", "Las horas semanales deben ser un número válido.")
+    if len(clave) > 20 or len(nombre) > 255 or len(tipo) > 50:
+        messagebox.showerror("Error de Datos", "La clave admite hasta 20 caracteres, el nombre hasta 255 y el tipo hasta 50.")
+        return False
+    if not horas_str.isascii() or not horas_str.isdigit() or len(horas_str) > 2:
+        messagebox.showerror("Error de Datos", "Las horas semanales deben ser un número entero de hasta 2 dígitos.")
         return False
 
     from src.conexion import obtener_cursor
@@ -50,7 +61,7 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre, tipo):
                     return True
                 else:
                     messagebox.showinfo("Cancelado", "No se realizaron cambios.")
-                    return True
+                    return False
             else:
                 sql_insert = """
                     INSERT INTO materias (materia_id, nombre, horas_semana, semestre_id, tipo)
@@ -60,7 +71,7 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre, tipo):
                 messagebox.showinfo("Éxito", f"Materia '{nombre}' guardada correctamente.")
                 return True
         
-        except mysql.connector.Error as err:
+        except sqlite3.Error as err:
             conn.rollback()
             messagebox.showerror("Error BD", f"Error al procesar la materia: {err}")
             return False

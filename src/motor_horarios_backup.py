@@ -1,4 +1,3 @@
-import mysql.connector
 import datetime
 import math
 
@@ -809,4 +808,3 @@ class GeneradorHorarios:
 #martes ultima revision
 #expo jueves 25 junio
 #quitar esa parte d elos laboratorios
-

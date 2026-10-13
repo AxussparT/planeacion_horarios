@@ -1,6 +1,5 @@
 import threading
 import numpy as np
-import mysql.connector
 import re
 import unicodedata
 from src.conexion import get_conexion
@@ -73,24 +72,6 @@ class MemoriaHorarioGrafico:
         mapeo_dias = {"Lunes": 1, "Martes": 2, "Miércoles": 3, "Jueves": 4, "Viernes": 5, "Sábado": 6}
 
         try:
-            dict_entidades = {}
-            nombres_entidades = {}
-
-            if modo == "Salón":
-                cursor.execute("SELECT salon_id AS id FROM salones ORDER BY salon_id")
-            elif modo == "Profesor":
-                cursor.execute("SELECT profesor_id AS id, nombre AS desc_nombre FROM profesores ORDER BY nombre")
-            elif modo == "Grupo":
-                cursor.execute("SELECT grupo_id AS id FROM grupos ORDER BY grupo_id")
-
-            regs = cursor.fetchall()
-            for i, reg in enumerate(regs):
-                dict_entidades[reg['id']] = i
-                nombres_entidades[reg['id']] = reg.get('desc_nombre', reg['id'])
-
-            if not dict_entidades:
-                return [], {}, {}
-
             query = """
                 SELECT h.horario_id, h.salon_id, h.dia, h.hora_inicio, h.hora_fin,
                        a.profesor_id, a.grupo_id, m.nombre AS materia,
@@ -102,9 +83,42 @@ class MemoriaHorarioGrafico:
                 JOIN profesores p ON a.profesor_id = p.profesor_id
             """
             cursor.execute(query)
+            horarios = cursor.fetchall()
+
+            dict_entidades = {}
+            nombres_entidades = {}
+            if modo == "Salón":
+                entidades_con_horario = {
+                    reg['salon_id']: reg['salon_id'] for reg in horarios
+                }
+            elif modo == "Profesor":
+                entidades_con_horario = {
+                    reg['profesor_id']: reg['profesor_nombre'] for reg in horarios
+                }
+            elif modo == "Grupo":
+                cursor.execute("SELECT grupo_id AS id FROM grupos ORDER BY grupo_id")
+                entidades_con_horario = {
+                    reg['id']: reg['id'] for reg in cursor.fetchall()
+                }
+            else:
+                entidades_con_horario = {}
+
+            entidades_ordenadas = sorted(
+                entidades_con_horario.items(),
+                key=lambda entidad: (
+                    str(entidad[1]).casefold(),
+                    str(entidad[0]).casefold()
+                )
+            )
+            for indice, (entidad_id, nombre) in enumerate(entidades_ordenadas):
+                dict_entidades[entidad_id] = indice
+                nombres_entidades[entidad_id] = nombre
+
+            if not dict_entidades:
+                return [], {}, {}
 
             verdadero_horario = []
-            for reg in cursor.fetchall():
+            for reg in horarios:
                 dia_normalizado = _normalizar_dia(reg['dia'])
                 dia_col = mapeo_dias.get(dia_normalizado, 0)
                 if dia_col == 0:

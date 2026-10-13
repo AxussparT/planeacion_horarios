@@ -1,21 +1,26 @@
 from src.conexion import obtener_cursor
 from tkinter import messagebox
-import mysql.connector
+import sqlite3
 
 class grupo:
     def __init__(self, grupo_id, nivel):
         self.grupo_id = str(grupo_id).strip().upper()
         self.nivel = str(nivel).strip()
+        self.exito = False
 
-        if not self.grupo_id:
-            messagebox.showerror("Error de Datos", "El grupo es obligatorio.")
+        if not self.grupo_id or len(self.grupo_id) > 20:
+            messagebox.showerror("Error de Datos", "El grupo es obligatorio y debe tener hasta 20 caracteres.")
             return
 
-        if not self.nivel.isdigit():
-            messagebox.showerror("Error de Datos", "El semestre debe ser un número válido.")
+        if (
+            not self.nivel.isascii()
+            or not self.nivel.isdigit()
+            or len(self.nivel) > 2
+        ):
+            messagebox.showerror("Error de Datos", "El semestre debe ser un número entero de hasta 2 dígitos.")
             return
 
-        self.procesar_datos()
+        self.exito = self.procesar_datos()
 
     def procesar_datos(self):
         with obtener_cursor() as ctx:
@@ -31,7 +36,7 @@ class grupo:
                     cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, %s)", (self.grupo_id, self.nivel))
                     messagebox.showinfo("Éxito", f"Grupo '{self.grupo_id}' guardado correctamente")
                 return True
-            except mysql.connector.Error as err:
+            except sqlite3.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error", f"Error al guardar el grupo: {err}")
                 return False

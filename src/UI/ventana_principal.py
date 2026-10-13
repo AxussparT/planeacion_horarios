@@ -1,9 +1,11 @@
 import tkinter as tk
 from tkinter import ttk, font
 from PIL import Image, ImageTk
-import mysql.connector
+import sqlite3
+import math
+import json
 from src.conexion import get_conexion
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 from src.UI.ventana_gestion import VentanaGestion
 from src.clases.profesor import profesor
 from src.clases.materia import materia
@@ -31,6 +33,7 @@ class VentanaPrincipal:
         self.cache_materias = []
         self.cache_salones = []
         self.cache_grupos = []
+        self._after_busqueda_profesores_id = None
         self._last_width = 0
         self._last_height = 0
         self._scale_factor = 1.0
@@ -105,8 +108,11 @@ class VentanaPrincipal:
         pf_frame.pack(fill='x', padx=25, pady=(0, 5))
 
         self._crear_campo(pf_frame, "No. Cuenta", "entry_no_cuenta", 0)
-        self._crear_campo(pf_frame, "Nombre(s)", "entry_nombre", 1)
-        self._crear_campo(pf_frame, "Apellidos", "entry_apellido", 2)
+        self._crear_campo(pf_frame, "Nombre completo", "entry_nombre_completo", 1)
+        self._crear_campo(pf_frame, "Correo institucional", "entry_correo_institucional", 2)
+        self._limitar_entrada(self.entry_no_cuenta, 10, solo_digitos=True)
+        self._limitar_entrada(self.entry_nombre_completo, 255)
+        self._limitar_entrada(self.entry_correo_institucional, 255)
         pf_frame.columnconfigure(1, weight=1)
 
         # --- Botones Profesor ---
@@ -129,6 +135,10 @@ class VentanaPrincipal:
         self._crear_campo(mf_frame, "Nombre Materia", "entry_materia_nom", 1)
         self._crear_campo(mf_frame, "Horas Semana", "entry_materia_horas", 2)
         self._crear_campo(mf_frame, "Semestre", "entry_materia_semestre", 3)
+        self._limitar_entrada(self.entry_materia_clave, 20)
+        self._limitar_entrada(self.entry_materia_nom, 255)
+        self._limitar_entrada(self.entry_materia_horas, 2, solo_digitos=True)
+        self._limitar_entrada(self.entry_materia_semestre, 2, solo_digitos=True)
 
         ttk.Label(mf_frame, text="Prioridad:", style='fondo.TLabel').grid(row=4, column=0, sticky='w', pady=4)
         self.combo_preferencia = ttk.Combobox(mf_frame, width=32, font=self._fuente_label, state='readonly')
@@ -152,6 +162,8 @@ class VentanaPrincipal:
 
         self._crear_campo(sf_frame, "Número de aula", "entry_num_aula", 0)
         self._crear_campo(sf_frame, "Capacidad", "entry_capacidad_aula", 1)
+        self._limitar_entrada(self.entry_num_aula, 4)
+        self._limitar_entrada(self.entry_capacidad_aula, 3, solo_digitos=True)
 
         ttk.Label(sf_frame, text="Tipo de aula:", style='fondo.TLabel').grid(row=2, column=0, sticky='w', pady=4)
         self.combo_tipo = ttk.Combobox(sf_frame, width=32, font=self._fuente_label, state='readonly')
@@ -175,6 +187,8 @@ class VentanaPrincipal:
 
         self._crear_campo(gf_frame, "Grupo", "entry_grupo_id", 0)
         self._crear_campo(gf_frame, "Semestre", "entry_grupo_nivel", 1)
+        self._limitar_entrada(self.entry_grupo_id, 20)
+        self._limitar_entrada(self.entry_grupo_nivel, 2, solo_digitos=True)
         gf_frame.columnconfigure(1, weight=1)
 
         f_btns_grupo = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
@@ -205,8 +219,21 @@ class VentanaPrincipal:
         self.scrollbar_der.grid(row=0, column=2, sticky="nse", pady=10)
 
         self.sv_busqueda = tk.StringVar()
-        self.sv_busqueda.trace_add("write", lambda *a: self.filtrar_profesores())
-        self.crear_seccion_tabla("Profesores Registrados", "sv_busqueda", "tabla_profesores", ('No. Cuenta', 'Profesor', 'Disponibilidad'))
+        self.sv_busqueda.trace_add("write", lambda *a: self._programar_filtro_profesores())
+        f_acciones_catalogo = ttk.Frame(self.frame_derecho, style='blue.TFrame')
+        f_acciones_catalogo.pack(fill='x', padx=5, pady=(8, 2))
+        ttk.Button(
+            f_acciones_catalogo,
+            text="Exportar datos",
+            command=self.exportar_datos_personal
+        ).pack(side='right', padx=3)
+        ttk.Button(
+            f_acciones_catalogo,
+            text="Importar datos",
+            command=self.importar_datos_personal
+        ).pack(side='right', padx=3)
+        self.crear_seccion_tabla("Profesores Registrados", "sv_busqueda", "tabla_profesores", ('No. Cuenta', 'Profesor', 'Correo institucional'))
+        self.tabla_profesores.column('Correo institucional', width=240, anchor='w')
         self.tabla_profesores.bind("<<TreeviewSelect>>", self.cargar_profesor_seleccionado)
 
         self.sv_busqueda_mat = tk.StringVar()
@@ -347,6 +374,21 @@ class VentanaPrincipal:
         e.grid(row=row, column=1, sticky='ew', padx=(12, 0), pady=4)
         setattr(self, attr, e)
 
+    def _limitar_entrada(self, entry, max_length, solo_digitos=False):
+        def validar(valor_propuesto, accion):
+            if accion == "-1":
+                return True
+            if len(valor_propuesto) > max_length:
+                return False
+            return (
+                not solo_digitos
+                or not valor_propuesto
+                or (valor_propuesto.isascii() and valor_propuesto.isdigit())
+            )
+
+        validar_cmd = (self.master.register(validar), "%P", "%d")
+        entry.configure(validate="key", validatecommand=validar_cmd)
+
     def crear_seccion_tabla(self, titulo, var_busq, attr_tabla, cols, combo_semestre_var=None):
         ttk.Label(self.frame_derecho, text=titulo, font=self._fuente_sub, style='fondo.TLabel').pack(pady=(12, 4))
         if var_busq:
@@ -377,8 +419,8 @@ class VentanaPrincipal:
     def limpiar_campos_profesor(self):
         self.entry_no_cuenta.config(state='normal')
         self.entry_no_cuenta.delete(0, tk.END)
-        self.entry_nombre.delete(0, tk.END)
-        self.entry_apellido.delete(0, tk.END)
+        self.entry_nombre_completo.delete(0, tk.END)
+        self.entry_correo_institucional.delete(0, tk.END)
         self._profesor_id_seleccionado = None
 
     def cargar_profesor_seleccionado(self, event):
@@ -390,15 +432,10 @@ class VentanaPrincipal:
 
         no_cuenta = v[0]
         nombre = v[1] if len(v) > 1 else ''
+        correo = v[2] if len(v) > 2 else ''
         self.entry_no_cuenta.insert(0, no_cuenta)
-        partes = nombre.split()
-        prefijos = {"DR.", "MTRO.", "MTRA.", "ING.", "LIC.", "LICDA.", "ARQ.", "C.P.", "M.C.", "M.A."}
-        if len(partes) >= 2 and (partes[0].endswith('.') or partes[0].upper() in prefijos):
-            self.entry_nombre.insert(0, f"{partes[0]} {partes[1]}")
-            self.entry_apellido.insert(0, " ".join(partes[2:]))
-        else:
-            self.entry_nombre.insert(0, partes[0] if partes else '')
-            self.entry_apellido.insert(0, " ".join(partes[1:]))
+        self.entry_nombre_completo.insert(0, nombre)
+        self.entry_correo_institucional.insert(0, correo)
 
         self._profesor_id_seleccionado = None
         for d in self.cache_profesores:
@@ -411,14 +448,23 @@ class VentanaPrincipal:
     def evento_boton_profesores(self):
         self.master.update_idletasks()
         no_cuenta = self.entry_no_cuenta.get().strip()
-        full_n = f"{self.entry_nombre.get()} {self.entry_apellido.get()}".strip()
+        full_n = self.entry_nombre_completo.get().strip().upper()
+        correo = self.entry_correo_institucional.get().strip() or None
 
-        if not no_cuenta:
-            messagebox.showwarning("Aviso", "El número de cuenta es obligatorio.")
+        if not no_cuenta.isascii() or not no_cuenta.isdigit() or len(no_cuenta) > 10:
+            messagebox.showwarning("Aviso", "El número de cuenta debe contener de 1 a 10 dígitos.")
+            return
+        if not full_n or len(full_n) > 255:
+            messagebox.showwarning("Aviso", "El nombre del profesor es obligatorio y no puede exceder 255 caracteres.")
+            return
+        if correo and len(correo) > 255:
+            messagebox.showwarning("Aviso", "El correo institucional no puede exceder 255 caracteres.")
             return
 
         periodos = self.obtener_periodos_desde_ui()
-        profesor(no_cuenta, full_n, periodos)
+        registro = profesor(no_cuenta, full_n, periodos, correo)
+        if not registro.exito:
+            return
         self.limpiar_campos_profesor()
         self._refresh_all()
 
@@ -456,46 +502,557 @@ class VentanaPrincipal:
             cur = conn.cursor()
             try:
                 cur.execute("""
-                    SELECT p.profesor_id, p.no_cuenta, p.nombre,
-                           GROUP_CONCAT(CONCAT(pd.dia, ' ', pd.hora_inicio, '-', pd.hora_fin) ORDER BY pd.id SEPARATOR '; ') AS disponibilidad
-                    FROM profesores p
-                    LEFT JOIN profesor_disponibilidad pd ON p.profesor_id = pd.profesor_id
-                    GROUP BY p.profesor_id, p.no_cuenta, p.nombre
-                    ORDER BY p.nombre
+                    SELECT profesor_id, no_cuenta, nombre, correo_institucional
+                    FROM profesores
+                    ORDER BY nombre
                 """)
                 self.cache_profesores = cur.fetchall()
-            except Exception:
-                cur.execute("SELECT profesor_id, no_cuenta, nombre, '' as disponibilidad FROM profesores")
-                self.cache_profesores = cur.fetchall()
+            except sqlite3.Error as err:
+                messagebox.showerror("Error de Base de Datos", f"No se pudieron cargar los profesores: {err}")
             finally:
                 cur.close()
                 conn.close()
         self.refrescar_tabla_prof(self.cache_profesores)
 
     def refrescar_tabla_prof(self, datos):
-        self.tabla_profesores.delete(*self.tabla_profesores.get_children())
+        children = self.tabla_profesores.get_children()
+        if children:
+            self.tabla_profesores.delete(*children)
         for d in datos:
             prof_id = d[0]
             no_cuenta = d[1] if len(d) > 1 and d[1] is not None else ''
             nombre = d[2] if len(d) > 2 else ''
-            disp = d[3] if len(d) > 3 else ''
-            self.tabla_profesores.insert("", "end", values=(no_cuenta, nombre, disp))
+            correo = d[3] if len(d) > 3 and d[3] is not None else ''
+            self.tabla_profesores.insert("", "end", values=(no_cuenta, nombre, correo))
+
+    def _programar_filtro_profesores(self):
+        if self._after_busqueda_profesores_id is not None:
+            self.master.after_cancel(self._after_busqueda_profesores_id)
+        self._after_busqueda_profesores_id = self.master.after(
+            200, self._filtrar_profesores_diferido
+        )
+
+    def _filtrar_profesores_diferido(self):
+        self._after_busqueda_profesores_id = None
+        self.filtrar_profesores()
 
     def filtrar_profesores(self):
         t = self.sv_busqueda.get().lower()
-        f = [p for p in self.cache_profesores if t in str(p[0]).lower() or t in str(p[1]).lower() or t in str(p[2]).lower()]
+        f = [
+            p for p in self.cache_profesores
+            if any(t in str(valor or '').lower() for valor in p[:4])
+        ]
         self.refrescar_tabla_prof(f)
+
+    def exportar_datos_personal(self):
+        carpeta_descargas = os.path.join(os.path.expanduser("~"), "Downloads")
+        filepath = filedialog.asksaveasfilename(
+            title="Exportar datos de Personal",
+            defaultextension=".json",
+            filetypes=[("Archivos JSON", "*.json")],
+            initialdir=carpeta_descargas,
+            initialfile="datos_personal.json"
+        )
+        if not filepath:
+            return
+
+        conn = get_conexion()
+        if conn is None:
+            messagebox.showerror("Error de conexión", "No se pudo conectar con la base de datos.")
+            return
+
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT profesor_id, no_cuenta, nombre, correo_institucional "
+                "FROM profesores ORDER BY nombre"
+            )
+            profesores_rows = cur.fetchall()
+            cur.execute(
+                "SELECT profesor_id, dia, hora_inicio, hora_fin "
+                "FROM profesor_disponibilidad ORDER BY id"
+            )
+            disponibilidad_por_profesor = {}
+            for profesor_id, dia, hora_inicio, hora_fin in cur.fetchall():
+                disponibilidad_por_profesor.setdefault(str(profesor_id), []).append({
+                    "dia": dia,
+                    "hora_inicio": str(hora_inicio),
+                    "hora_fin": str(hora_fin)
+                })
+
+            profesores = [
+                {
+                    "profesor_id": profesor_id,
+                    "no_cuenta": no_cuenta,
+                    "nombre": nombre,
+                    "correo_institucional": correo,
+                    "disponibilidad": disponibilidad_por_profesor.get(str(profesor_id), [])
+                }
+                for profesor_id, no_cuenta, nombre, correo in profesores_rows
+            ]
+
+            cur.execute(
+                "SELECT materia_id, nombre, horas_semana, semestre_id, tipo "
+                "FROM materias ORDER BY materia_id"
+            )
+            materias = [
+                {
+                    "materia_id": materia_id,
+                    "nombre": nombre,
+                    "horas_semana": str(horas_semana),
+                    "semestre_id": semestre_id,
+                    "tipo": tipo
+                }
+                for materia_id, nombre, horas_semana, semestre_id, tipo in cur.fetchall()
+            ]
+
+            cur.execute("SELECT salon_id, capacidad, tipo FROM salones ORDER BY salon_id")
+            salones = [
+                {"salon_id": salon_id, "capacidad": capacidad, "tipo": tipo}
+                for salon_id, capacidad, tipo in cur.fetchall()
+            ]
+
+            cur.execute("SELECT grupo_id, nivel FROM grupos ORDER BY grupo_id")
+            grupos = [
+                {"grupo_id": grupo_id, "nivel": nivel}
+                for grupo_id, nivel in cur.fetchall()
+            ]
+
+            datos = {
+                "formato": "saga_datos_personal",
+                "version": 1,
+                "profesores": profesores,
+                "materias": materias,
+                "salones": salones,
+                "grupos": grupos
+            }
+            with open(filepath, "w", encoding="utf-8") as archivo:
+                json.dump(datos, archivo, indent=2, ensure_ascii=False)
+        except (OSError, sqlite3.Error) as err:
+            messagebox.showerror("Error al exportar", f"No se pudieron exportar los datos: {err}")
+            return
+        finally:
+            cur.close()
+            conn.close()
+
+        try:
+            en_descargas = os.path.commonpath(
+                [os.path.abspath(filepath), os.path.abspath(carpeta_descargas)]
+            ) == os.path.abspath(carpeta_descargas)
+        except ValueError:
+            en_descargas = False
+
+        if en_descargas:
+            mensaje = f"El archivo se almacenó correctamente en la carpeta de Descargas:\n{filepath}"
+        else:
+            mensaje = f"El archivo se almacenó correctamente en:\n{filepath}"
+        messagebox.showinfo("Exportación completa", mensaje)
+
+    def _preguntar_coincidencia_catalogo(self, tipo, identificador, descripcion):
+        dialogo = tk.Toplevel(self.master)
+        dialogo.title("Coincidencia encontrada")
+        dialogo.transient(self.master)
+        dialogo.resizable(False, False)
+        dialogo.grab_set()
+        dialogo.resultado = None
+
+        ttk.Label(
+            dialogo,
+            text=(
+                f"Se encontró un registro de {tipo} que coincide con:\n"
+                f"{identificador}\n\n{descripcion}\n\n"
+                "¿Es el mismo registro? Sí lo actualizará sin crear un duplicado."
+            ),
+            justify="left",
+            wraplength=420
+        ).pack(padx=18, pady=(18, 12))
+
+        botones = ttk.Frame(dialogo)
+        botones.pack(fill="x", padx=12, pady=(0, 12))
+
+        def cerrar(resultado):
+            dialogo.resultado = resultado
+            dialogo.destroy()
+
+        ttk.Button(botones, text="Sí", command=lambda: cerrar("si")).pack(side="left", padx=4)
+        ttk.Button(
+            botones,
+            text="No, crear otro",
+            command=lambda: cerrar("no")
+        ).pack(side="left", padx=4)
+        ttk.Button(
+            botones,
+            text="Sí a todos",
+            command=lambda: cerrar("si_todos")
+        ).pack(side="right", padx=4)
+        dialogo.protocol("WM_DELETE_WINDOW", lambda: cerrar("cancelar"))
+        dialogo.bind("<Escape>", lambda event: cerrar("cancelar"))
+        dialogo.wait_window()
+        return dialogo.resultado
+
+    @staticmethod
+    def _nuevo_id_catalogo(base_id, existentes, max_length):
+        base_id = str(base_id).strip()
+        sufijo_num = 2
+        while True:
+            sufijo = f"_{sufijo_num}"
+            candidato = f"{base_id[:max_length - len(sufijo)]}{sufijo}"
+            if candidato not in existentes:
+                return candidato
+            sufijo_num += 1
+
+    def importar_datos_personal(self):
+        filepath = filedialog.askopenfilename(
+            title="Importar datos de Personal",
+            filetypes=[("Archivos JSON", "*.json")]
+        )
+        if not filepath:
+            return
+
+        try:
+            with open(filepath, "r", encoding="utf-8") as archivo:
+                datos = json.load(archivo)
+        except (OSError, json.JSONDecodeError) as err:
+            messagebox.showerror("Archivo inválido", f"No se pudo leer el archivo JSON: {err}")
+            return
+
+        if (
+            not isinstance(datos, dict)
+            or datos.get("formato") != "saga_datos_personal"
+            or datos.get("version") != 1
+        ):
+            messagebox.showerror(
+                "Formato no compatible",
+                "Selecciona un archivo exportado desde la sección Personal."
+            )
+            return
+
+        listas = {}
+        for entidad in ("profesores", "materias", "salones", "grupos"):
+            if entidad not in datos:
+                messagebox.showerror(
+                    "Archivo inválido",
+                    f"El archivo no contiene la sección '{entidad}'."
+                )
+                return
+            registros = datos[entidad]
+            if not isinstance(registros, list) or any(not isinstance(registro, dict) for registro in registros):
+                messagebox.showerror(
+                    "Archivo inválido",
+                    f"La sección '{entidad}' debe ser una lista de registros JSON."
+                )
+                return
+            listas[entidad] = registros
+
+        conn = get_conexion()
+        if conn is None:
+            messagebox.showerror("Error de conexión", "No se pudo conectar con la base de datos.")
+            return
+
+        cur = conn.cursor()
+        conteos = {"profesores": 0, "materias": 0, "salones": 0, "grupos": 0}
+        confirmar_todos = False
+        try:
+            cur.execute("SELECT profesor_id, no_cuenta, nombre FROM profesores")
+            profesores_actuales = cur.fetchall()
+            profesor_ids = {str(row[0]) for row in profesores_actuales}
+            cur.execute("SELECT materia_id, nombre, semestre_id FROM materias")
+            materias_actuales = cur.fetchall()
+            materia_ids = {str(row[0]) for row in materias_actuales}
+            cur.execute("SELECT salon_id FROM salones")
+            salon_ids = {str(row[0]) for row in cur.fetchall()}
+            cur.execute("SELECT grupo_id FROM grupos")
+            grupo_ids = {str(row[0]) for row in cur.fetchall()}
+
+            for registro in listas["profesores"]:
+                cuenta = str(registro.get("no_cuenta") or "").strip()
+                nombre = str(registro.get("nombre") or "").strip().upper()
+                correo = str(registro.get("correo_institucional") or "").strip() or None
+                profesor_id_archivo = str(registro.get("profesor_id") or "").strip().upper()
+                disponibilidad = registro.get("disponibilidad", [])
+                if not nombre or not isinstance(disponibilidad, list):
+                    raise ValueError("Cada profesor debe incluir nombre y una lista de disponibilidad.")
+                if len(nombre) > 255 or len(cuenta) > 20 or len(profesor_id_archivo) > 20:
+                    raise ValueError(f"Los datos de identificación del profesor '{nombre}' exceden el tamaño permitido.")
+                if correo and len(correo) > 255:
+                    raise ValueError(f"El correo institucional de '{nombre}' excede 255 caracteres.")
+
+                existente = None
+                if profesor_id_archivo:
+                    cur.execute("SELECT profesor_id FROM profesores WHERE profesor_id = %s", (profesor_id_archivo,))
+                    existente = cur.fetchone()
+                if not existente and cuenta:
+                    cur.execute("SELECT profesor_id FROM profesores WHERE no_cuenta = %s LIMIT 1", (cuenta,))
+                    existente = cur.fetchone()
+                if not existente:
+                    cur.execute("SELECT profesor_id FROM profesores WHERE nombre = %s LIMIT 1", (nombre,))
+                    existente = cur.fetchone()
+
+                mismo = False
+                if existente:
+                    if not confirmar_todos:
+                        decision = self._preguntar_coincidencia_catalogo(
+                            "profesor",
+                            f"{cuenta or profesor_id_archivo or nombre} - {nombre}",
+                            f"Correo institucional: {correo or '(vacío)'}"
+                        )
+                        if decision == "cancelar" or decision is None:
+                            raise InterruptedError("Importación cancelada por el usuario.")
+                        if decision == "si_todos":
+                            confirmar_todos = True
+                            mismo = True
+                        else:
+                            mismo = decision == "si"
+                    else:
+                        mismo = True
+
+                if mismo:
+                    nuevo_profesor_id = str(existente[0])
+                    cur.execute(
+                        "UPDATE profesores SET no_cuenta = %s, nombre = %s, correo_institucional = %s "
+                        "WHERE profesor_id = %s",
+                        (cuenta or None, nombre, correo, nuevo_profesor_id)
+                    )
+                    cur.execute("DELETE FROM profesor_disponibilidad WHERE profesor_id = %s", (nuevo_profesor_id,))
+                else:
+                    nuevo_profesor_id = profesor_id_archivo
+                    if not nuevo_profesor_id or nuevo_profesor_id in profesor_ids:
+                        nuevo_profesor_id = _generar_profesor_id(cur)
+                    cur.execute(
+                        "INSERT INTO profesores "
+                        "(profesor_id, no_cuenta, nombre, correo_institucional, disponible_inicio, "
+                        "disponible_fin, dias_disponibles, en_linea) "
+                        "VALUES (%s, %s, %s, %s, '00:00:00', '00:00:00', '', 'NO')",
+                        (nuevo_profesor_id, cuenta or None, nombre, correo)
+                    )
+                    profesor_ids.add(nuevo_profesor_id)
+
+                for periodo in disponibilidad:
+                    if not isinstance(periodo, dict):
+                        raise ValueError(f"La disponibilidad de '{nombre}' contiene un elemento inválido.")
+                    dia = str(periodo.get("dia") or "").strip()
+                    hora_inicio = str(periodo.get("hora_inicio") or "").strip()
+                    hora_fin = str(periodo.get("hora_fin") or "").strip()
+                    if not dia or not hora_inicio or not hora_fin:
+                        raise ValueError(f"Un periodo de disponibilidad de '{nombre}' está incompleto.")
+                    cur.execute(
+                        "INSERT INTO profesor_disponibilidad (profesor_id, dia, hora_inicio, hora_fin) "
+                        "VALUES (%s, %s, %s, %s)",
+                        (nuevo_profesor_id, dia, hora_inicio, hora_fin)
+                    )
+                conteos["profesores"] += 1
+
+            for registro in listas["materias"]:
+                materia_id = str(registro.get("materia_id") or "").strip().upper()
+                nombre = str(registro.get("nombre") or "").strip().upper()
+                horas = str(registro.get("horas_semana") or "").strip()
+                semestre = registro.get("semestre_id")
+                tipo = str(registro.get("tipo") or "Normal").strip().upper()
+                if not materia_id or not nombre or not horas:
+                    raise ValueError("Cada materia debe incluir clave, nombre y horas semanales.")
+                if len(materia_id) > 20:
+                    raise ValueError(f"La clave de materia '{materia_id}' excede 20 caracteres.")
+                try:
+                    horas_numero = float(horas)
+                    if not math.isfinite(horas_numero) or horas_numero < 0:
+                        raise ValueError
+                    semestre = int(semestre) if semestre not in (None, "") else None
+                except (TypeError, ValueError, OverflowError) as err:
+                    raise ValueError(f"Los datos numéricos de la materia '{materia_id}' no son válidos.") from err
+                if len(nombre) > 255 or len(tipo) > 50:
+                    raise ValueError(f"Los datos de la materia '{materia_id}' exceden el tamaño permitido.")
+
+                existente = None
+                cur.execute("SELECT materia_id FROM materias WHERE materia_id = %s", (materia_id,))
+                existente = cur.fetchone()
+                if not existente:
+                    cur.execute(
+                        "SELECT materia_id FROM materias WHERE LOWER(nombre) = LOWER(%s) "
+                        "AND semestre_id <=> %s LIMIT 1",
+                        (nombre, semestre)
+                    )
+                    existente = cur.fetchone()
+
+                mismo = False
+                if existente:
+                    if not confirmar_todos:
+                        decision = self._preguntar_coincidencia_catalogo(
+                            "materia",
+                            materia_id,
+                            f"{nombre} (semestre {semestre or 'sin semestre'})"
+                        )
+                        if decision == "cancelar" or decision is None:
+                            raise InterruptedError("Importación cancelada por el usuario.")
+                        if decision == "si_todos":
+                            confirmar_todos = True
+                            mismo = True
+                        else:
+                            mismo = decision == "si"
+                    else:
+                        mismo = True
+
+                if mismo:
+                    nuevo_materia_id = str(existente[0])
+                    cur.execute(
+                        "UPDATE materias SET nombre = %s, horas_semana = %s, semestre_id = %s, tipo = %s "
+                        "WHERE materia_id = %s",
+                        (nombre, horas, semestre, tipo, nuevo_materia_id)
+                    )
+                else:
+                    nuevo_materia_id = materia_id
+                    if nuevo_materia_id in materia_ids:
+                        nuevo_materia_id = self._nuevo_id_catalogo(materia_id, materia_ids, 20)
+                    cur.execute(
+                        "INSERT INTO materias (materia_id, nombre, horas_semana, semestre_id, tipo) "
+                        "VALUES (%s, %s, %s, %s, %s)",
+                        (nuevo_materia_id, nombre, horas, semestre, tipo)
+                    )
+                    materia_ids.add(nuevo_materia_id)
+                conteos["materias"] += 1
+
+            for registro in listas["salones"]:
+                salon_id = str(registro.get("salon_id") or "").strip().upper()
+                capacidad = registro.get("capacidad", 0)
+                tipo = str(registro.get("tipo") or "Normal").strip().upper()
+                if not salon_id:
+                    raise ValueError("Cada salón debe incluir un número de aula.")
+                if capacidad is None:
+                    capacidad = 0
+                if len(salon_id) > 50:
+                    raise ValueError(f"El identificador del salón '{salon_id}' excede 50 caracteres.")
+                try:
+                    capacidad = int(capacidad)
+                except (TypeError, ValueError, OverflowError) as err:
+                    raise ValueError(f"La capacidad del salón '{salon_id}' no es válida.") from err
+                if capacidad < 0:
+                    raise ValueError(f"La capacidad del salón '{salon_id}' no puede ser negativa.")
+                if len(tipo) > 50:
+                    raise ValueError(f"El tipo del salón '{salon_id}' excede 50 caracteres.")
+
+                cur.execute("SELECT salon_id FROM salones WHERE salon_id = %s", (salon_id,))
+                existente = cur.fetchone()
+                mismo = False
+                if existente:
+                    if not confirmar_todos:
+                        decision = self._preguntar_coincidencia_catalogo(
+                            "salón", salon_id, f"Capacidad: {capacidad}; tipo: {tipo}"
+                        )
+                        if decision == "cancelar" or decision is None:
+                            raise InterruptedError("Importación cancelada por el usuario.")
+                        if decision == "si_todos":
+                            confirmar_todos = True
+                            mismo = True
+                        else:
+                            mismo = decision == "si"
+                    else:
+                        mismo = True
+
+                if mismo:
+                    nuevo_salon_id = str(existente[0])
+                    cur.execute(
+                        "UPDATE salones SET capacidad = %s, tipo = %s WHERE salon_id = %s",
+                        (capacidad, tipo, nuevo_salon_id)
+                    )
+                else:
+                    nuevo_salon_id = salon_id
+                    if nuevo_salon_id in salon_ids:
+                        nuevo_salon_id = self._nuevo_id_catalogo(salon_id, salon_ids, 50)
+                    cur.execute(
+                        "INSERT INTO salones (salon_id, capacidad, tipo) VALUES (%s, %s, %s)",
+                        (nuevo_salon_id, capacidad, tipo)
+                    )
+                    salon_ids.add(nuevo_salon_id)
+                conteos["salones"] += 1
+
+            for registro in listas["grupos"]:
+                grupo_id = str(registro.get("grupo_id") or "").strip().upper()
+                nivel = registro.get("nivel")
+                if not grupo_id:
+                    raise ValueError("Cada grupo debe incluir un identificador.")
+                if len(grupo_id) > 20:
+                    raise ValueError(f"El identificador del grupo '{grupo_id}' excede 20 caracteres.")
+                if nivel not in (None, ""):
+                    try:
+                        nivel = int(nivel)
+                    except (TypeError, ValueError, OverflowError) as err:
+                        raise ValueError(f"El semestre del grupo '{grupo_id}' no es válido.") from err
+                else:
+                    nivel = None
+
+                cur.execute("SELECT grupo_id FROM grupos WHERE grupo_id = %s", (grupo_id,))
+                existente = cur.fetchone()
+                mismo = False
+                if existente:
+                    if not confirmar_todos:
+                        decision = self._preguntar_coincidencia_catalogo(
+                            "grupo", grupo_id, f"Semestre: {nivel}"
+                        )
+                        if decision == "cancelar" or decision is None:
+                            raise InterruptedError("Importación cancelada por el usuario.")
+                        if decision == "si_todos":
+                            confirmar_todos = True
+                            mismo = True
+                        else:
+                            mismo = decision == "si"
+                    else:
+                        mismo = True
+
+                if mismo:
+                    nuevo_grupo_id = str(existente[0])
+                    cur.execute(
+                        "UPDATE grupos SET nivel = %s WHERE grupo_id = %s",
+                        (nivel, nuevo_grupo_id)
+                    )
+                else:
+                    nuevo_grupo_id = grupo_id
+                    if nuevo_grupo_id in grupo_ids:
+                        nuevo_grupo_id = self._nuevo_id_catalogo(grupo_id, grupo_ids, 20)
+                    cur.execute(
+                        "INSERT INTO grupos (grupo_id, nivel) VALUES (%s, %s)",
+                        (nuevo_grupo_id, nivel)
+                    )
+                    grupo_ids.add(nuevo_grupo_id)
+                conteos["grupos"] += 1
+
+            conn.commit()
+        except InterruptedError:
+            conn.rollback()
+            return
+        except (ValueError, sqlite3.Error) as err:
+            conn.rollback()
+            messagebox.showerror("Error al importar", f"No se importaron los datos: {err}")
+            return
+        finally:
+            cur.close()
+            conn.close()
+
+        self._refresh_all()
+        resumen = "\n".join(f"{tipo.title()}: {cantidad}" for tipo, cantidad in conteos.items())
+        messagebox.showinfo("Importación completa", f"Datos procesados correctamente:\n\n{resumen}")
 
     # =================== LÓGICA MATERIAS ===================
 
     def evento_materias(self):
         self.master.update_idletasks()
-        c = self.entry_materia_clave.get()
-        n = self.entry_materia_nom.get()
-        h = self.entry_materia_horas.get()
-        s = self.entry_materia_semestre.get()
-        t = self.combo_preferencia.get()
-        if materia(c, n, h, s, t):
+        c = self.entry_materia_clave.get().strip().upper()
+        n = self.entry_materia_nom.get().strip().upper()
+        h = self.entry_materia_horas.get().strip()
+        s = self.entry_materia_semestre.get().strip()
+        t = self.combo_preferencia.get().strip().upper()
+        if not c or len(c) > 20 or not n or len(n) > 255:
+            messagebox.showwarning("Aviso", "La clave es obligatoria (máximo 20 caracteres) y el nombre (máximo 255).")
+            return
+        if not h.isascii() or not h.isdigit() or len(h) > 2:
+            messagebox.showwarning("Aviso", "Las horas semanales deben ser un número entero de hasta 2 dígitos.")
+            return
+        if s and (not s.isascii() or not s.isdigit() or len(s) > 2):
+            messagebox.showwarning("Aviso", "El semestre debe ser un número entero de hasta 2 dígitos.")
+            return
+        if not t or len(t) > 50:
+            messagebox.showwarning("Aviso", "Selecciona un tipo de materia válido.")
+            return
+        registro = materia(c, n, h, s, t)
+        if registro.exito:
             for e in [self.entry_materia_clave, self.entry_materia_nom, self.entry_materia_horas, self.entry_materia_semestre]:
                 e.delete(0, tk.END)
             self._refresh_all()
@@ -536,10 +1093,20 @@ class VentanaPrincipal:
 
     def evento_Salones(self):
         self.master.update_idletasks()
-        aula = self.entry_num_aula.get()
-        cap = self.entry_capacidad_aula.get()
-        tipo = self.combo_tipo.get()
-        if salon(numero_aula=aula, capacidad=cap, tipo=tipo):
+        aula = self.entry_num_aula.get().strip().upper()
+        cap = self.entry_capacidad_aula.get().strip()
+        tipo = self.combo_tipo.get().strip().upper()
+        if not aula or len(aula) > 4:
+            messagebox.showwarning("Aviso", "El número de aula es obligatorio y debe tener hasta 4 caracteres.")
+            return
+        if not cap.isascii() or not cap.isdigit() or len(cap) > 3:
+            messagebox.showwarning("Aviso", "La capacidad debe ser un número entero de hasta 3 dígitos.")
+            return
+        if not tipo or len(tipo) > 50:
+            messagebox.showwarning("Aviso", "Selecciona un tipo de salón válido.")
+            return
+        registro = salon(numero_aula=aula, capacidad=cap, tipo=tipo)
+        if registro.exito:
             self.entry_num_aula.delete(0, tk.END)
             self.entry_capacidad_aula.delete(0, tk.END)
             self.combo_tipo.set("")
@@ -633,9 +1200,16 @@ class VentanaPrincipal:
 
     def evento_grupos(self):
         self.master.update_idletasks()
-        g = self.entry_grupo_id.get()
-        n = self.entry_grupo_nivel.get()
-        if grupo(g, n):
+        g = self.entry_grupo_id.get().strip()
+        n = self.entry_grupo_nivel.get().strip()
+        if not g or len(g) > 20:
+            messagebox.showwarning("Aviso", "El identificador del grupo es obligatorio y debe tener hasta 20 caracteres.")
+            return
+        if not n.isascii() or not n.isdigit() or len(n) > 2:
+            messagebox.showwarning("Aviso", "El semestre debe ser un número entero de hasta 2 dígitos.")
+            return
+        registro = grupo(g, n)
+        if registro.exito:
             self.entry_grupo_id.delete(0, tk.END)
             self.entry_grupo_nivel.delete(0, tk.END)
             self._refresh_all()

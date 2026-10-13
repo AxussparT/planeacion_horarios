@@ -1,6 +1,5 @@
 from src.conexion import get_conexion
 from tkinter import messagebox
-import mysql.connector
 from .Validar_materia import validar_y_registrar_materia 
 
 class materia:
@@ -15,7 +14,7 @@ class materia:
         print(f"Datos de materia guardados en el objeto: {self.nombre} (Tipo: {self.tipo})")
         
         # Inicia el procesamiento de la lógica de negocio
-        self.procesar_datos()
+        self.exito = self.procesar_datos()
 
     def procesar_datos(self):
         """

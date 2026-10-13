@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, font, messagebox, filedialog, simpledialog
 from PIL import Image, ImageTk
-import mysql.connector
+import sqlite3
 import datetime
 import textwrap
 import os
@@ -13,6 +13,7 @@ import unicodedata
 
 from src.conexion import get_conexion, obtener_cursor, obtener_cursor_dict
 from src.motor_horarios_nuevo import GeneradorHorarios
+from src.clases.validacion_bd import _generar_profesor_id
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Rectangle
@@ -28,17 +29,25 @@ def ruta_recurso(relative_path):
 
 def _migrar_bd():
     conn = None
+    cursor = None
     try:
         conn = get_conexion()
         if conn is None:
             return
-        cur = conn.cursor()
-        cur.execute("ALTER TABLE asignaciones ADD COLUMN dias VARCHAR(50) DEFAULT NULL")
-        conn.commit()
-    except Exception:
-        conn.rollback() if conn else None
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(asignaciones)")
+        columnas = {fila[1] for fila in cursor.fetchall()}
+        if "dias" not in columnas:
+            cursor.execute("ALTER TABLE asignaciones ADD COLUMN dias TEXT DEFAULT NULL")
+            conn.commit()
+    except sqlite3.Error as err:
+        if conn:
+            conn.rollback()
+        print(f"Error migrando el esquema SQLite: {err}")
     finally:
-        if conn and conn.is_connected():
+        if cursor:
+            cursor.close()
+        if conn:
             conn.close()
 
 def _backfill_dias():
@@ -115,6 +124,11 @@ class VentanaGestion:
         self._debounce_after_id = None
         self._periodo_seleccionado = None
         self._semestres_filtrados = []
+        self._wheel_delta = 0
+        self._wheel_bindings = []
+        self._after_busqueda_profesores_id = None
+        self._after_busqueda_asignaciones_id = None
+        self._disponibilidad_profesores = {}
         
         self._fuente_titulo = font.Font(family="Roboto", size=18, weight="bold")
         self._fuente_sub = font.Font(family="Roboto", size=12)
@@ -141,13 +155,29 @@ class VentanaGestion:
                 filas = cur.fetchall()
                 for row in filas:
                     gid = row[0]
-                    nivel = str(row[1]) if row[1] is not None else "0"
+                    nivel = self._normalizar_nivel_grupo(row[1])
                     if nivel not in grupos:
                         grupos[nivel] = []
                     grupos[nivel].append(gid)
         except Exception as e:
             print(f"Error cargando grupos desde BD: {e}")
         return grupos
+
+    @staticmethod
+    def _normalizar_nivel_grupo(nivel):
+        if nivel is None:
+            return "0"
+        try:
+            return str(int(float(nivel)))
+        except (TypeError, ValueError, OverflowError):
+            return str(nivel).strip()
+
+    def _grupos_del_semestre(self, semestre_id):
+        semestre_id = self._normalizar_nivel_grupo(semestre_id)
+        for nivel, grupos in self.grupos_por_semestre.items():
+            if self._normalizar_nivel_grupo(nivel) == semestre_id:
+                return grupos
+        return []
 
     def _confirmar_cierre(self):
         if self._en_operacion:
@@ -258,16 +288,6 @@ class VentanaGestion:
             self.canvas_izq.itemconfig(self._canvas_izq_window, width=event.width)
         self.canvas_izq.bind('<Configure>', ajustar_ancho_izq)
 
-        def _on_mousewheel_izq(event):
-            self.canvas_izq.yview_scroll(int(-1 * (event.delta / 120)), 'units')
-        def _on_mousewheel_izq_linux(event):
-            self.canvas_izq.yview_scroll(-1 if event.num == 4 else 1, 'units')
-
-        self.canvas_izq.bind('<MouseWheel>', _on_mousewheel_izq)
-        self.canvas_izq.bind('<Button-4>', _on_mousewheel_izq_linux)
-        self.canvas_izq.bind('<Button-5>', _on_mousewheel_izq_linux)
-        self.canvas_izq.bind('<Enter>', lambda e: self.canvas_izq.focus_set())
-
         self.canvas_izq.configure(yscrollcommand=self.sb_izq.set)
         self.canvas_izq.pack(side='left', fill='both', expand=True, padx=(10, 5))
         self.sb_izq.pack(side='left', fill='y')
@@ -320,19 +340,10 @@ class VentanaGestion:
             self.canvas_der.itemconfig(self._canvas_der_window, width=event.width)
         self.canvas_der.bind('<Configure>', ajustar_ancho_der)
 
-        def _on_mousewheel(event):
-            self.canvas_der.yview_scroll(int(-1 * (event.delta / 120)), 'units')
-        def _on_mousewheel_linux(event):
-            self.canvas_der.yview_scroll(-1 if event.num == 4 else 1, 'units')
-
-        self.canvas_der.bind('<MouseWheel>', _on_mousewheel)
-        self.canvas_der.bind('<Button-4>', _on_mousewheel_linux)
-        self.canvas_der.bind('<Button-5>', _on_mousewheel_linux)
-        self.canvas_der.bind('<Enter>', lambda e: self.canvas_der.focus_set())
-
         self.canvas_der.configure(yscrollcommand=self.sb_der.set)
         self.canvas_der.pack(side='left', fill='both', expand=True, padx=(5, 0))
         self.sb_der.pack(side='left', fill='y', padx=(0, 10))
+        self._vincular_rueda_del_ratón()
 
         # --- Tabla de Profesores (seleccionable) ---
         lbl_prof = ttk.Label(self.frame_der, text="Profesores", background='#0A0F1E', foreground='white', font=self._fuente_sub)
@@ -341,7 +352,7 @@ class VentanaGestion:
         f_busca_prof = ttk.Frame(self.frame_der, style='blue.TFrame')
         f_busca_prof.pack(fill='x', padx=6)
         self.sv_busca_prof_tabla = tk.StringVar()
-        self.sv_busca_prof_tabla.trace_add("write", lambda *a: self._filtrar_tabla_profesores())
+        self.sv_busca_prof_tabla.trace_add("write", lambda *a: self._programar_filtro_tabla_profesores())
         ttk.Entry(f_busca_prof, textvariable=self.sv_busca_prof_tabla, font=self._fuente_label).pack(fill='x')
 
         cols_prof = ('No. Cuenta', 'Profesor', 'Disponibilidad')
@@ -379,7 +390,7 @@ class VentanaGestion:
         f_busqueda.pack(fill='x', pady=(2, 2))
         ttk.Label(f_busqueda, text="Buscar:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=5)
         self.sv_busqueda_asignaciones = tk.StringVar()
-        self.sv_busqueda_asignaciones.trace_add("write", lambda *a: self.actualizar_vista_previa())
+        self.sv_busqueda_asignaciones.trace_add("write", lambda *a: self._programar_actualizacion_vista_previa())
         entry_busqueda = ttk.Entry(f_busqueda, textvariable=self.sv_busqueda_asignaciones, font=self._fuente_label)
         entry_busqueda.pack(side='left', fill='x', expand=True, padx=(0, 5))
 
@@ -387,7 +398,7 @@ class VentanaGestion:
         f_filtros_vp = ttk.Frame(self.frame_der, style='blue.TFrame')
         f_filtros_vp.pack(fill='x', pady=(2, 2))
         ttk.Label(f_filtros_vp, text="Semestre:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(5, 2))
-        self._sv_filtro_semestre_vp = tk.StringVar()
+        self._sv_filtro_semestre_vp = tk.StringVar(value="Todos")
         self._sv_filtro_semestre_vp.trace_add("write", lambda *a: self._on_filtro_semestre_vp())
         self.combo_filtro_semestre_vp = ttk.Combobox(f_filtros_vp, textvariable=self._sv_filtro_semestre_vp, state="readonly", width=12, font=self._fuente_label)
         self.combo_filtro_semestre_vp.pack(side='left', padx=(0, 10))
@@ -395,7 +406,7 @@ class VentanaGestion:
 
         ttk.Label(f_filtros_vp, text="Grupo:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
         self._sv_filtro_grupo_vp = tk.StringVar()
-        self._sv_filtro_grupo_vp.trace_add("write", lambda *a: self.actualizar_vista_previa())
+        self._sv_filtro_grupo_vp.trace_add("write", lambda *a: self._on_cambio_filtro_grupo_vp())
         self.combo_filtro_grupo_vp = ttk.Combobox(f_filtros_vp, textvariable=self._sv_filtro_grupo_vp, state="readonly", width=14, font=self._fuente_label)
         self.combo_filtro_grupo_vp.pack(side='left')
         self.combo_filtro_grupo_vp['values'] = ["Todos"]
@@ -431,19 +442,110 @@ class VentanaGestion:
         ttk.Button(f_acciones, text="Liberar", command=self.borrar_asignacion_seleccionada).pack(side='left', padx=4)
         ttk.Button(f_acciones, text="Borrar Todas", command=self.formatear_asignaciones).pack(side='left', padx=4)
 
+        self.frame_previa_horario = ttk.LabelFrame(
+            self.frame_der, text="Horario del grupo", style='blue.TFrame'
+        )
+        self.frame_previa_horario.pack(fill='x', padx=6, pady=(4, 8))
+        ttk.Button(
+            self.frame_previa_horario,
+            text="Ajustar vista",
+            command=self._abrir_previa_horario_ajustada
+        ).pack(anchor='e', padx=4, pady=(4, 0))
+        self.canvas_previa_horario = tk.Canvas(
+            self.frame_previa_horario, height=566, background='white',
+            highlightthickness=0
+        )
+        self.canvas_previa_horario.pack(fill='x', expand=True, padx=4, pady=4)
+        self.canvas_previa_horario.bind(
+            '<Configure>', lambda event: self._dibujar_previa_horario_grupo(
+                self.canvas_previa_horario
+            )
+        )
+
         self.ventana.after(100, self.actualizar_vista_previa)
+        self.ventana.after(150, self._cargar_previa_horario_grupo)
+
+    def _vincular_rueda_del_ratón(self):
+        self._wheel_toplevel = self.ventana.winfo_toplevel()
+        for secuencia in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            funcid = self._wheel_toplevel.bind(
+                secuencia, self._desplazar_panel_con_rueda, add='+'
+            )
+            self._wheel_bindings.append((secuencia, funcid))
+        self.ventana.bind('<Destroy>', self._limpiar_vinculos_rueda, add='+')
+
+    def _limpiar_vinculos_rueda(self, event):
+        if event.widget is not self.ventana:
+            return
+        for secuencia, funcid in self._wheel_bindings:
+            self._wheel_toplevel.unbind(secuencia, funcid)
+        self._wheel_bindings.clear()
+
+    def _desplazar_panel_con_rueda(self, event):
+        try:
+            widget = self._wheel_toplevel.winfo_containing(event.x_root, event.y_root)
+        except tk.TclError:
+            return
+        if widget is None:
+            return
+
+        canvas = None
+        cursor = widget
+        while cursor is not None:
+            if cursor.winfo_class() == 'Treeview':
+                return
+            if cursor is self.canvas_izq or cursor is self.canvas_der:
+                canvas = cursor
+                break
+            cursor = cursor.master
+        if canvas is None:
+            return
+
+        if event.num == 4:
+            unidades = -1
+        elif event.num == 5:
+            unidades = 1
+        else:
+            self._wheel_delta += event.delta
+            unidades = -int(self._wheel_delta / 120)
+            self._wheel_delta -= int(self._wheel_delta / 120) * 120
+            if unidades == 0:
+                return 'break'
+
+        canvas.yview_scroll(unidades, 'units')
+        return 'break'
 
     # --- UTILIDADES ---
 
     def _filtrar_tabla_profesores(self):
         texto = self.sv_busca_prof_tabla.get().strip().lower()
-        for item in self.tabla_profesores.get_children():
-            self.tabla_profesores.delete(item)
         if not texto:
             self._poblar_tabla_profesores(self._lista_completa_profesores)
         else:
             filtrados = [p for p in self._lista_completa_profesores if texto in p[1].lower() or texto in p[2].lower()]
             self._poblar_tabla_profesores(filtrados)
+
+    def _programar_filtro_tabla_profesores(self):
+        if self._after_busqueda_profesores_id is not None:
+            self.ventana.after_cancel(self._after_busqueda_profesores_id)
+        self._after_busqueda_profesores_id = self.ventana.after(
+            200, self._filtrar_tabla_profesores_diferido
+        )
+
+    def _filtrar_tabla_profesores_diferido(self):
+        self._after_busqueda_profesores_id = None
+        self._filtrar_tabla_profesores()
+
+    def _programar_actualizacion_vista_previa(self):
+        if self._after_busqueda_asignaciones_id is not None:
+            self.ventana.after_cancel(self._after_busqueda_asignaciones_id)
+        self._after_busqueda_asignaciones_id = self.ventana.after(
+            250, self._actualizar_vista_previa_diferido
+        )
+
+    def _actualizar_vista_previa_diferido(self):
+        self._after_busqueda_asignaciones_id = None
+        self.actualizar_vista_previa()
 
     def _cargar_profesor_desde_tabla(self, event):
         item = self.tabla_profesores.focus()
@@ -474,20 +576,57 @@ class VentanaGestion:
     def _cambiar_filtro_semestre(self, event=None):
         self._actualizar_materias_en_periodos()
 
-    def _on_filtro_semestre_vp(self):
+    def _on_filtro_semestre_vp(self, preservar_seleccion=False):
         sel = self._sv_filtro_semestre_vp.get()
+        grupo_seleccionado = self._sv_filtro_grupo_vp.get()
         grupos = ["Todos"]
         if sel and sel != "Todos" and ' - ' in sel:
             try:
-                sid = sel.split(' - ')[0].strip()
-                grupos_sem = self.grupos_por_semestre.get(sid, [])
+                sid = self._normalizar_nivel_grupo(sel.split(' - ')[0])
+                grupos_sem = self._grupos_del_semestre(sid)
                 if grupos_sem:
                     grupos.extend(grupos_sem)
             except (ValueError, IndexError):
                 pass
+        else:
+            grupos.extend(
+                grupo
+                for semestre in sorted(
+                    self.grupos_por_semestre,
+                    key=lambda valor: (
+                        not self._normalizar_nivel_grupo(valor).isdigit(),
+                        int(self._normalizar_nivel_grupo(valor))
+                        if self._normalizar_nivel_grupo(valor).isdigit()
+                        else self._normalizar_nivel_grupo(valor)
+                    )
+                )
+                for grupo in self.grupos_por_semestre[semestre]
+                if grupo not in grupos
+            )
         self.combo_filtro_grupo_vp['values'] = grupos
-        self._sv_filtro_grupo_vp.set("Todos")
+        if preservar_seleccion and grupo_seleccionado in grupos:
+            self._sv_filtro_grupo_vp.set(grupo_seleccionado)
+        else:
+            self._sv_filtro_grupo_vp.set("Todos")
         self.actualizar_vista_previa()
+
+    def _on_cambio_filtro_grupo_vp(self):
+        self.actualizar_vista_previa()
+        if hasattr(self, 'canvas_previa_horario'):
+            self._cargar_previa_horario_grupo()
+
+    def _actualizar_grupos_en_periodos(self):
+        for periodo in self._periodos_asignacion:
+            for combo_materia, combo_grupo in periodo.get("filas_asignacion", []):
+                grupo_actual = combo_grupo.get().strip().upper()
+                asignacion_cargada = getattr(combo_grupo, "_asignacion_cargada", None)
+                materia_id = self._obtener_id_valido(combo_materia.get())
+                preservar_grupo = asignacion_cargada == (materia_id, grupo_actual)
+                self._actualizar_grupos_de_asignacion(
+                    combo_materia,
+                    combo_grupo,
+                    preservar_grupo=preservar_grupo
+                )
 
     def _materias_filtradas_actual(self):
         semestre_txt = self.combo_filtro_semestre.get()
@@ -506,26 +645,60 @@ class VentanaGestion:
 
     def _actualizar_materias_en_periodos(self):
         filtradas = self._materias_filtradas_actual()
-        grupos_filtrados = self._grupos_filtrados_actual()
         for pd in self._periodos_asignacion:
             for cm, cg in pd.get("filas_asignacion", []):
                 cm['values'] = filtradas
                 if cm.get() and cm.get() not in filtradas:
                     cm.set('')
-                cg['values'] = grupos_filtrados
-                if cg.get() and cg.get() not in grupos_filtrados:
-                    cg.set('')
+                materia_id = self._obtener_id_valido(cm.get())
+                grupo_actual = cg.get().strip().upper()
+                asignacion_cargada = getattr(cg, "_asignacion_cargada", None)
+                preservar_grupo = asignacion_cargada == (materia_id, grupo_actual)
+                self._actualizar_grupos_de_asignacion(
+                    cm, cg, preservar_grupo=preservar_grupo
+                )
+
+    def _grupos_para_materia(self, materia_texto):
+        materia_id = self._obtener_id_valido(materia_texto)
+        if not materia_id:
+            return self._grupos_filtrados_actual()
+        nivel = self.materias_map.get(str(materia_id))
+        if nivel is None:
+            return self._grupos_filtrados_actual()
+        return self.cargar_grupos_por_semestre(nivel, materia_id)
+
+    def _actualizar_grupos_de_asignacion(self, combo_materia, combo_grupo, preservar_grupo=False):
+        grupos = self._grupos_para_materia(combo_materia.get())
+        grupo_actual = combo_grupo.get().strip().upper()
+        if preservar_grupo and grupo_actual and grupo_actual not in grupos:
+            grupos.append(grupo_actual)
+        combo_grupo['values'] = grupos
+        if grupo_actual and grupo_actual not in grupos:
+            combo_grupo.set('')
+
+    def _on_cambio_materia_asignacion(self, combo_materia, combo_grupo, label_restante):
+        self._actualizar_horas_periodo(combo_materia, label_restante)
+        combo_grupo.set('')
+        self._actualizar_grupos_de_asignacion(combo_materia, combo_grupo)
 
     def _grupos_filtrados_actual(self):
         semestre_txt = self.combo_filtro_semestre.get()
         if semestre_txt and semestre_txt != "Todos" and ' - ' in semestre_txt:
             try:
-                sid = semestre_txt.split(' - ')[0].strip()
-                return self.grupos_por_semestre.get(sid, [])
+                sid = self._normalizar_nivel_grupo(semestre_txt.split(' - ')[0])
+                return self._grupos_del_semestre(sid)
             except (ValueError, IndexError):
                 pass
         todos = []
-        for sem in sorted(self.grupos_por_semestre.keys(), key=int):
+        for sem in sorted(
+            self.grupos_por_semestre,
+            key=lambda nivel: (
+                not self._normalizar_nivel_grupo(nivel).isdigit(),
+                int(self._normalizar_nivel_grupo(nivel))
+                if self._normalizar_nivel_grupo(nivel).isdigit()
+                else self._normalizar_nivel_grupo(nivel)
+            )
+        ):
             for g in self.grupos_por_semestre[sem]:
                 if g not in todos:
                     todos.append(g)
@@ -873,7 +1046,6 @@ class VentanaGestion:
                 mat_ids.append(mat_inicial)
             cm = ttk.Combobox(f_asig, values=mat_ids, width=28, font=self._fuente_label, state='readonly')
             cm.grid(row=row, column=1, padx=4, pady=1)
-            cm.bind("<<ComboboxSelected>>", lambda e, c=cm, lb=label_restante: self._actualizar_horas_periodo(c, lb))
 
             ttk.Label(f_asig, text="Grupo:", background='#0A0F1E', foreground='white', font=self._fuente_label).grid(row=row, column=2, sticky='w', padx=(10, 2))
             cg = ttk.Combobox(f_asig, values=todos_grupos, width=10, font=self._fuente_label, state='normal')
@@ -883,6 +1055,18 @@ class VentanaGestion:
                 cm.set(mat_inicial)
             if grp_inicial:
                 cg.set(grp_inicial)
+                cg._asignacion_cargada = (
+                    self._obtener_id_valido(mat_inicial),
+                    str(grp_inicial).strip().upper()
+                )
+            self._actualizar_grupos_de_asignacion(
+                cm, cg, preservar_grupo=bool(grp_inicial)
+            )
+            cm.bind(
+                "<<ComboboxSelected>>",
+                lambda e, materia=cm, grupo=cg, lb=label_restante:
+                    self._on_cambio_materia_asignacion(materia, grupo, lb)
+            )
 
             filas_asignacion.append((cm, cg))
 
@@ -998,15 +1182,52 @@ class VentanaGestion:
                         continue
 
                 todos_dias = dias_sel + dias_extra
+                try:
+                    choques = self._detectar_choques_grupo(
+                        grupo_id, mat_id, todos_dias, hora_i, hora_f
+                    )
+                except (sqlite3.Error, RuntimeError) as err:
+                    messagebox.showerror(
+                        "Error al validar horario",
+                        f"No se pudo comprobar si el grupo tiene un choque:\n{err}"
+                    )
+                    continue
+                if choques:
+                    detalles = []
+                    for choque in choques:
+                        inicio_choque = self._minutos_hora_previa(choque['inicio'])
+                        fin_choque = self._minutos_hora_previa(choque['fin'])
+                        if inicio_choque is None or fin_choque is None:
+                            rango = f"{choque['inicio']} - {choque['fin']}"
+                        else:
+                            rango = (
+                                f"{inicio_choque // 60:02d}:{inicio_choque % 60:02d} - "
+                                f"{fin_choque // 60:02d}:{fin_choque % 60:02d}"
+                            )
+                        detalles.append(
+                            f"{choque['dia']}, {rango}: {choque['materia']}"
+                        )
+                    messagebox.showwarning(
+                        "Choque de horario",
+                        f"No se guardó la asignación de {materia_txt} para el grupo "
+                        f"{grupo_id} porque se cruza con otra clase del grupo:\n\n"
+                        + "\n".join(detalles)
+                    )
+                    continue
+
+                guardada = self._asignar_periodo(
+                    self._profesor_id_seleccionado, mat_id, grupo_id,
+                    periodo or "A", hora_i, hora_f, modalidad_var.get(),
+                    ", ".join(dias_sel)
+                )
+                if not guardada:
+                    continue
+
+                self._actualizar_materias_en_periodos()
                 self._guardar_disponibilidad_periodo(
                     self._profesor_id_seleccionado, hora_i, hora_f,
                     todos_dias, modalidad_var.get(),
                     wd.get('db_hora_i', ''), wd.get('db_hora_f', '')
-                )
-                dias_str = ", ".join(dias_sel)
-                self._asignar_periodo(
-                    self._profesor_id_seleccionado, mat_id, grupo_id,
-                    periodo or "A", hora_i, hora_f, modalidad_var.get(), dias_str
                 )
                 if accion == "completar":
                     dias_str_extra = ", ".join(dias_extra)
@@ -1024,6 +1245,8 @@ class VentanaGestion:
                                 )
                                 conn2.commit()
                 alguna_guardada = True
+                self._seleccionar_grupo_previa(grupo_id)
+                self._cargar_previa_horario_grupo()
 
             if alguna_guardada:
                 btn_guardar.config(text="Guardado")
@@ -1091,7 +1314,30 @@ class VentanaGestion:
                 cur.execute("SELECT profesor_id, no_cuenta, nombre FROM profesores ORDER BY nombre")
                 prof_rows = cur.fetchall()
                 total = len(prof_rows)
-                config = {"version": 1, "profesores": []}
+
+                cur.execute("SELECT materia_id, nombre, horas_semana, semestre_id, tipo FROM materias")
+                mat_rows = cur.fetchall()
+                materias_catalog = []
+                for m_id, m_nombre, m_hs, m_sem, m_tipo in mat_rows:
+                    materias_catalog.append({
+                        "materia_id": m_id,
+                        "nombre": m_nombre,
+                        "horas_semana": str(m_hs) if m_hs else "4",
+                        "semestre_id": m_sem,
+                        "tipo": m_tipo or "Normal"
+                    })
+
+                cur.execute("SELECT salon_id, capacidad, tipo FROM salones")
+                sal_rows = cur.fetchall()
+                salones_catalog = []
+                for s_id, s_cap, s_tipo in sal_rows:
+                    salones_catalog.append({
+                        "salon_id": s_id,
+                        "capacidad": s_cap,
+                        "tipo": s_tipo or "Normal"
+                    })
+
+                config = {"version": 1, "materias": materias_catalog, "salones": salones_catalog, "profesores": []}
 
                 for i, (prof_id, no_cuenta, nombre) in enumerate(prof_rows):
                     cur.execute(
@@ -1183,6 +1429,7 @@ class VentanaGestion:
                 if self._profesor_id_seleccionado:
                     self._cargar_periodos_desde_bd()
                 self.actualizar_vista_previa()
+                self._cargar_previa_horario_grupo()
                 messagebox.showinfo("Configuración", f"Configuración guardada para {total} profesor(es) en:\n{filepath}\n\nBD formateada. Lista para nuevas asignaciones.")
                 return True
         except Exception as e:
@@ -1213,7 +1460,30 @@ class VentanaGestion:
                 cur.execute("SELECT profesor_id, no_cuenta, nombre FROM profesores ORDER BY nombre")
                 prof_rows = cur.fetchall()
                 total = len(prof_rows)
-                config = {"version": 1, "profesores": []}
+
+                cur.execute("SELECT materia_id, nombre, horas_semana, semestre_id, tipo FROM materias")
+                mat_rows = cur.fetchall()
+                materias_catalog = []
+                for m_id, m_nombre, m_hs, m_sem, m_tipo in mat_rows:
+                    materias_catalog.append({
+                        "materia_id": m_id,
+                        "nombre": m_nombre,
+                        "horas_semana": str(m_hs) if m_hs else "4",
+                        "semestre_id": m_sem,
+                        "tipo": m_tipo or "Normal"
+                    })
+
+                cur.execute("SELECT salon_id, capacidad, tipo FROM salones")
+                sal_rows = cur.fetchall()
+                salones_catalog = []
+                for s_id, s_cap, s_tipo in sal_rows:
+                    salones_catalog.append({
+                        "salon_id": s_id,
+                        "capacidad": s_cap,
+                        "tipo": s_tipo or "Normal"
+                    })
+
+                config = {"version": 1, "materias": materias_catalog, "salones": salones_catalog, "profesores": []}
                 for i, (prof_id, no_cuenta, nombre) in enumerate(prof_rows):
                     cur.execute(
                         "SELECT dia, hora_inicio, hora_fin, modalidad FROM profesor_disponibilidad WHERE profesor_id = %s AND dia != '6' ORDER BY dia",
@@ -1281,6 +1551,69 @@ class VentanaGestion:
         finally:
             self._progress_config.pack_forget()
 
+    def _sincronizar_profesor_desde_json(self, cur, prof):
+        """Inserta o reutiliza un profesor en la BD al cargar una configuración.
+
+        Busca coincidencias por no_cuenta o por nombre. Si encuentra alguna,
+        pregunta al usuario si es el mismo registro:
+          - Sí  → reutiliza el registro existente de la BD (sin modificar su
+                  no_cuenta ni su nombre); solo se sobreescribirá su disponibilidad.
+          - No  → crea un nuevo registro para el profesor del JSON.
+        Si no hay coincidencias, crea un nuevo registro directamente.
+
+        Devuelve el profesor_id a usar, o None si el profesor debe omitirse.
+        """
+        prof_id_json = (prof.get("profesor_id") or "").strip()
+        no_cuenta_json = (prof.get("no_cuenta") or "").strip()
+        nombre_json = (prof.get("nombre") or "").strip()
+
+        candidatos = []
+        if no_cuenta_json:
+            cur.execute("SELECT profesor_id, no_cuenta, nombre FROM profesores WHERE no_cuenta = %s", (no_cuenta_json,))
+            for row in cur.fetchall():
+                if row not in candidatos:
+                    candidatos.append(row)
+        if nombre_json:
+            cur.execute("SELECT profesor_id, no_cuenta, nombre FROM profesores WHERE nombre = %s", (nombre_json,))
+            for row in cur.fetchall():
+                if row not in candidatos:
+                    candidatos.append(row)
+
+        if candidatos:
+            detalle_bd = "\n".join(
+                f"    {pid}  |  Cuenta: {nc or '(vacía)'}  |  Nombre: {nm}"
+                for pid, nc, nm in candidatos
+            )
+            mismo = messagebox.askyesno(
+                "Profesor existente",
+                f"El profesor del archivo JSON:\n"
+                f"    {prof_id_json or '(sin ID)'}  |  Cuenta: {no_cuenta_json or '(vacía)'}  |  Nombre: {nombre_json}\n\n"
+                f"Coincide con el(los) registro(s) en la base de datos:\n{detalle_bd}\n\n"
+                f"¿Son el MISMO profesor?\n\n"
+                f"[Sí]  Conservar el registro de la BD y solo actualizar su disponibilidad.\n"
+                f"[No]  Crear un nuevo registro para este profesor."
+            )
+            if mismo:
+                print(f"[DEBUG CARGAR] Coincidencia aceptada para {nombre_json!r} -> usa {candidatos[0][0]}")
+                return candidatos[0][0]
+            print(f"[DEBUG CARGAR] Coincidencia rechazada para {nombre_json!r} -> se creará un nuevo registro")
+
+        nuevo_id = None
+        if prof_id_json:
+            cur.execute("SELECT 1 FROM profesores WHERE profesor_id = %s", (prof_id_json,))
+            if not cur.fetchone():
+                nuevo_id = prof_id_json
+        if not nuevo_id:
+            nuevo_id = _generar_profesor_id(cur)
+
+        cur.execute(
+            "INSERT INTO profesores (profesor_id, no_cuenta, nombre, disponible_inicio, disponible_fin, dias_disponibles, en_linea) "
+            "VALUES (%s, %s, %s, '00:00:00', '00:00:00', '', 'NO')",
+            (nuevo_id, no_cuenta_json or None, nombre_json)
+        )
+        print(f"[DEBUG CARGAR] Nuevo profesor creado: {nuevo_id} ({nombre_json})")
+        return nuevo_id
+
     def _cargar_configuracion(self):
         filepath = filedialog.askopenfilename(
             filetypes=[("JSON files", "*.json")],
@@ -1322,8 +1655,59 @@ class VentanaGestion:
                 conn.commit()
                 print("[DEBUG CARGAR] BD formateada, cargando config...")
 
+                materias_catalog = config.get("materias", [])
+                if materias_catalog:
+                    insertadas = 0
+                    for mat in materias_catalog:
+                        m_id = mat.get("materia_id")
+                        m_nombre = mat.get("nombre", "")
+                        m_hs = mat.get("horas_semana", "4")
+                        m_sem = mat.get("semestre_id")
+                        m_tipo = mat.get("tipo", "Normal")
+                        if not m_id:
+                            continue
+                        cur.execute("SELECT 1 FROM materias WHERE materia_id = %s", (m_id,))
+                        if cur.fetchone():
+                            cur.execute(
+                                "UPDATE materias SET nombre=%s, horas_semana=%s, semestre_id=%s, tipo=%s WHERE materia_id=%s",
+                                (m_nombre, m_hs, m_sem, m_tipo, m_id)
+                            )
+                        else:
+                            cur.execute(
+                                "INSERT INTO materias (materia_id, nombre, horas_semana, semestre_id, tipo) VALUES (%s, %s, %s, %s, %s)",
+                                (m_id, m_nombre, m_hs, m_sem, m_tipo)
+                            )
+                            insertadas += 1
+                    print(f"[DEBUG CARGAR] Materias importadas: {insertadas} nuevas de {len(materias_catalog)} en JSON")
+                else:
+                    print("[DEBUG CARGAR] JSON sin catálogo de materias (formato antiguo)")
+
+                salones_catalog = config.get("salones", [])
+                if salones_catalog:
+                    insertados = 0
+                    for sal in salones_catalog:
+                        s_id = sal.get("salon_id")
+                        s_cap = sal.get("capacidad", 0)
+                        s_tipo = sal.get("tipo", "Normal")
+                        if not s_id:
+                            continue
+                        cur.execute("SELECT 1 FROM salones WHERE salon_id = %s", (s_id,))
+                        if not cur.fetchone():
+                            cur.execute(
+                                "INSERT INTO salones (salon_id, capacidad, tipo) VALUES (%s, %s, %s)",
+                                (s_id, s_cap, s_tipo)
+                            )
+                            insertados += 1
+                    print(f"[DEBUG CARGAR] Salones importados: {insertados} nuevos de {len(salones_catalog)} en JSON")
+                else:
+                    print("[DEBUG CARGAR] JSON sin catálogo de salones (formato antiguo)")
+
+                conn.commit()
+
                 for i, prof in enumerate(profesores):
-                    prof_id = prof["profesor_id"]
+                    prof_id = self._sincronizar_profesor_desde_json(cur, prof)
+                    if not prof_id:
+                        continue
                     print(f"[DEBUG CARGAR] Procesando profesor {prof_id} ({prof.get('nombre','?')})")
 
                     for periodo in prof.get("periodos", []):
@@ -1349,9 +1733,28 @@ class VentanaGestion:
                             grupo_id = self._obtener_id_valido(grupo_texto, es_grupo=True)
                             if not grupo_id:
                                 continue
+                            cur.execute(
+                                "SELECT semestre_id FROM materias WHERE materia_id = %s",
+                                (mat_id,)
+                            )
+                            materia = cur.fetchone()
+                            if not materia:
+                                print(f"[DEBUG CARGAR] *** MATERIA NO ENCONTRADA: {mat_id} - se omite asignación para {grupo_id}")
+                                continue
+
+                            nivel_grupo = materia[0] if materia[0] is not None else 0
                             cur.execute("SELECT grupo_id FROM grupos WHERE grupo_id = %s", (grupo_id,))
                             if not cur.fetchone():
-                                cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, 0)", (grupo_id,))
+                                cur.execute(
+                                    "INSERT INTO grupos (grupo_id, nivel) VALUES (%s, %s)",
+                                    (grupo_id, nivel_grupo)
+                                )
+                            else:
+                                cur.execute(
+                                    "UPDATE grupos SET nivel = %s "
+                                    "WHERE grupo_id = %s AND (nivel IS NULL OR nivel = 0)",
+                                    (nivel_grupo, grupo_id)
+                                )
                             dias_str = ", ".join(dias)
                             cur.execute(
                                 "INSERT INTO asignaciones (profesor_id, materia_id, grupo_id, estado, periodo, hora_inicio, hora_fin, dias, modalidad) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
@@ -1364,9 +1767,14 @@ class VentanaGestion:
                                     for h in horarios_data:
                                         dia_num = self._normalizar_dia(h["dia"])
                                         dia_nombre = self.MAPA_DIAS.get(dia_num, "Lunes")
+                                        salon_id = h["salon_id"]
+                                        cur.execute("SELECT 1 FROM salones WHERE salon_id = %s", (salon_id,))
+                                        if not cur.fetchone():
+                                            print(f"[DEBUG CARGAR] *** SALON NO ENCONTRADO: {salon_id} - se omite horario")
+                                            continue
                                         cur.execute(
                                             "INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin) VALUES (%s, %s, %s, %s, %s)",
-                                            (nueva_asignacion_id, h["salon_id"], dia_nombre, h["hora_inicio"], h["hora_fin"])
+                                            (nueva_asignacion_id, salon_id, dia_nombre, h["hora_inicio"], h["hora_fin"])
                                         )
 
                     conn.commit()
@@ -1376,7 +1784,26 @@ class VentanaGestion:
 
             if self._profesor_id_seleccionado:
                 self._cargar_periodos_desde_bd()
+            self.grupos_por_semestre = self._cargar_grupos_desde_bd()
+            if hasattr(self, 'combo_filtro_semestre_vp'):
+                self.combo_filtro_semestre_vp['values'] = ["Todos"] + list(self.semestres_map.values())
+                self._sv_filtro_semestre_vp.set("Todos")
+                self._on_filtro_semestre_vp()
+            with obtener_cursor() as ctx:
+                if ctx is not None:
+                    cur, conn = ctx
+                    cur.execute(
+                        "SELECT grupo_id FROM asignaciones "
+                        "WHERE estado IS NULL OR estado != 'cancelada' "
+                        "ORDER BY grupo_id LIMIT 1"
+                    )
+                    primer_grupo = cur.fetchone()
+                else:
+                    primer_grupo = None
+            if primer_grupo:
+                self._seleccionar_grupo_previa(primer_grupo[0])
             self.actualizar_vista_previa()
+            self._cargar_previa_horario_grupo()
             self._ultimo_config_path = filepath
             messagebox.showinfo("Configuración", f"Configuración cargada para {total} profesor(es).\nBD formateada y datos cargados.")
         except Exception as e:
@@ -1488,6 +1915,7 @@ class VentanaGestion:
                     messagebox.showinfo("Éxito", "Asignación eliminada correctamente.")
                     self.asignacion_seleccionada_id = None 
                     self.actualizar_vista_previa()
+                    self._cargar_previa_horario_grupo()
                     self._cargar_tensor_diferido()
                 except Exception as e:
                     conn.rollback()
@@ -1509,6 +1937,7 @@ class VentanaGestion:
                     messagebox.showinfo("Éxito", "La base de datos de asignaciones ha sido limpiada.")
                     self.asignacion_seleccionada_id = None
                     self.actualizar_vista_previa()
+                    self._cargar_previa_horario_grupo()
                     if self._profesor_id_seleccionado:
                         for item in self._periodos_frame.winfo_children():
                             item.destroy()
@@ -1617,6 +2046,7 @@ class VentanaGestion:
                         f"¡Perfecto! Se generaron {cantidad} horarios sin conflictos en modo '{modo_seleccionado}'.")
 
                 self._cargar_tensor_diferido(forzar=True)
+                self._cargar_previa_horario_grupo()
                 self.notebook.select(self.pes1)
 
             self.ventana.after(0, procesar_resultado)
@@ -1625,24 +2055,32 @@ class VentanaGestion:
         hilo.start()
 
     def cargar_grupos_por_semestre(self, semestre_id, materia_id=None):
-        semestre_id = str(semestre_id)
-        grupos_base = self.grupos_por_semestre.get(semestre_id, [])
+        grupos_base = self._grupos_del_semestre(semestre_id)
         grupos_filtrados = grupos_base.copy()
-
         if materia_id:
             with obtener_cursor() as ctx:
                 if ctx is None:
-                    return
+                    return []
                 cur, conn = ctx
                 try:
                     if self.asignacion_seleccionada_id:
-                        cur.execute("SELECT grupo_id FROM asignaciones WHERE materia_id = %s AND asignacion_id != %s", (materia_id, self.asignacion_seleccionada_id))
+                        cur.execute(
+                            "SELECT grupo_id FROM asignaciones "
+                            "WHERE materia_id = %s AND asignacion_id != %s "
+                            "AND (estado IS NULL OR estado != 'cancelada')",
+                            (materia_id, self.asignacion_seleccionada_id)
+                        )
                     else:
-                        cur.execute("SELECT grupo_id FROM asignaciones WHERE materia_id = %s", (materia_id,))
+                        cur.execute(
+                            "SELECT grupo_id FROM asignaciones "
+                            "WHERE materia_id = %s "
+                            "AND (estado IS NULL OR estado != 'cancelada')",
+                            (materia_id,)
+                        )
                     
                     grupos_ocupados = [row[0] for row in cur.fetchall()]
                     grupos_filtrados = [g for g in grupos_base if g not in grupos_ocupados]
-                except mysql.connector.Error as err:
+                except sqlite3.Error as err:
                     print(f"Error filtrando grupos: {err}")
 
         return grupos_filtrados
@@ -1664,6 +2102,20 @@ class VentanaGestion:
                     self.profesores_map[pid] = {"nombre": nombre, "no_cuenta": no_cuenta}
                     self._lista_completa_profesores.append((pid, no_cuenta, nombre))
 
+                cur.execute(
+                    "SELECT profesor_id, dia, hora_inicio, hora_fin "
+                    "FROM profesor_disponibilidad ORDER BY profesor_id"
+                )
+                filas_disponibilidad = cur.fetchall()
+                dias = {"0": "Lu", "1": "Ma", "2": "Mi", "3": "Ju", "4": "Vi", "5": "Sa", "6": "Do"}
+                self._disponibilidad_profesores = {}
+                for pid, dia, hora_inicio, hora_fin in filas_disponibilidad:
+                    key = str(pid)
+                    dia_str = dias.get(str(dia), f"D{dia}")
+                    self._disponibilidad_profesores.setdefault(key, []).append(
+                        f"{dia_str} {hora_inicio}-{hora_fin}"
+                    )
+
                 self._poblar_tabla_profesores(self._lista_completa_profesores)
 
                 cur.execute("SELECT id_semestre, nombre FROM semestres ORDER BY id_semestre")
@@ -1681,6 +2133,12 @@ class VentanaGestion:
                     sem_val = int(s_id) if s_id is not None else 0
                     self.lista_maestra_materias.append({"texto": f"{m_id} - {nombre}", "semestre": sem_val})
 
+                cur.execute("SELECT grupo_id, nivel FROM grupos ORDER BY nivel, grupo_id")
+                self.grupos_por_semestre = {}
+                for grupo_id, nivel in cur.fetchall():
+                    nivel = self._normalizar_nivel_grupo(nivel)
+                    self.grupos_por_semestre.setdefault(nivel, []).append(grupo_id)
+
                 self.actualizar_vista_previa()
 
                 if self._semestres_filtrados:
@@ -1693,11 +2151,13 @@ class VentanaGestion:
 
                 if hasattr(self, 'combo_filtro_semestre_vp'):
                     self.combo_filtro_semestre_vp['values'] = ["Todos"] + lista_sem
+                    self._on_filtro_semestre_vp(preservar_seleccion=True)
 
                 if not self.combo_periodos.get() and self.combo_periodos['values']:
                     self.combo_periodos.set(self.combo_periodos['values'][0])
                     self._cambiar_filtro_periodo()
-            except mysql.connector.Error as err:
+                self._actualizar_grupos_en_periodos()
+            except sqlite3.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error BD", f"Error cargando combos: {err}")
 
@@ -1705,27 +2165,11 @@ class VentanaGestion:
         if not hasattr(self, 'tabla_profesores'):
             return
 
-        disp_por_profesor = {}
-        try:
-            with obtener_cursor() as ctx:
-                if ctx is None:
-                    return
-                cur, conn = ctx
-                cur.execute("SELECT profesor_id, dia, hora_inicio, hora_fin FROM profesor_disponibilidad ORDER BY profesor_id")
-                filas = cur.fetchall()
-                dias = {"0": "Lu", "1": "Ma", "2": "Mi", "3": "Ju", "4": "Vi", "5": "Sa", "6": "Do"}
-                for pid, d, hi, hf in filas:
-                    if pid not in disp_por_profesor:
-                        disp_por_profesor[pid] = []
-                    dia_str = dias.get(str(d), f"D{d}")
-                    disp_por_profesor[pid].append(f"{dia_str} {hi}-{hf}")
-        except Exception:
-            pass
-
-        for item in self.tabla_profesores.get_children():
-            self.tabla_profesores.delete(item)
+        children = self.tabla_profesores.get_children()
+        if children:
+            self.tabla_profesores.delete(*children)
         for pid, no_cuenta, nombre in lista_prof:
-            partes = disp_por_profesor.get(pid, [])
+            partes = self._disponibilidad_profesores.get(str(pid), [])
             disponibilidad = ", ".join(partes[:3]) + ("..." if len(partes) > 3 else "") if partes else "Sin disponibilidad"
             self.tabla_profesores.insert('', 'end', values=(no_cuenta, nombre, disponibilidad))
 
@@ -2099,6 +2543,7 @@ class VentanaGestion:
                 self._mostrar_alertas_en_tabla()
 
                 self.actualizar_vista_previa()
+                self._cargar_previa_horario_grupo()
 
             except Exception as e:
                 conn.rollback()
@@ -2152,14 +2597,19 @@ class VentanaGestion:
                 if cur.fetchone():
                     if nivel is not None:
                         cur.execute("UPDATE grupos SET nivel = %s WHERE grupo_id = %s", (nivel, grupo_id))
+                        conn.commit()
+                        self.grupos_por_semestre = self._cargar_grupos_desde_bd()
+                        self._actualizar_materias_en_periodos()
                     return grupo_id
                 if nivel is None:
                     nivel = 0
                 cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, %s)", (grupo_id, nivel))
+                self.grupos_por_semestre = self._cargar_grupos_desde_bd()
+                self._actualizar_materias_en_periodos()
                 self.cargar_combos_bd() 
                 messagebox.showinfo("Éxito", f"Grupo '{grupo_id}' creado.")
                 return grupo_id
-            except mysql.connector.Error as err:
+            except sqlite3.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error BD", f"Error gestionando grupo: {err}")
                 return None
@@ -2189,7 +2639,11 @@ class VentanaGestion:
                     if messagebox.askyesno("Asignación existente",
                         "Esta asignación ya existe. ¿Desea modificar sus datos (periodo/horario)?"):
                         cur.execute(
-                            "UPDATE asignaciones SET periodo=%s, hora_inicio=%s, hora_fin=%s, dias=%s WHERE asignacion_id=%s",
+                            "DELETE FROM horarios WHERE asignacion_id=%s",
+                            (existente[0],)
+                        )
+                        cur.execute(
+                            "UPDATE asignaciones SET periodo=%s, hora_inicio=%s, hora_fin=%s, dias=%s, estado='pendiente' WHERE asignacion_id=%s",
                             (periodo, hora_i, hora_f, dias_str, existente[0])
                         )
                         conn.commit()
@@ -2210,7 +2664,11 @@ class VentanaGestion:
                         if messagebox.askyesno("Conflicto",
                             f"'{old_nombre}' ya tiene asignada esta materia y grupo en el periodo {periodo} ({modalidad}).\n¿Desea sustituirlo por el profesor actual?"):
                             cur.execute(
-                                "UPDATE asignaciones SET profesor_id=%s, hora_inicio=%s, hora_fin=%s, dias=%s WHERE asignacion_id=%s",
+                                "DELETE FROM horarios WHERE asignacion_id=%s",
+                                (old_asig_id,)
+                            )
+                            cur.execute(
+                                "UPDATE asignaciones SET profesor_id=%s, hora_inicio=%s, hora_fin=%s, dias=%s, estado='pendiente' WHERE asignacion_id=%s",
                                 (profesor_id, hora_i, hora_f, dias_str, old_asig_id)
                             )
                             conn.commit()
@@ -2227,7 +2685,7 @@ class VentanaGestion:
                         conn.commit()
                         messagebox.showinfo("Éxito", f"Asignación guardada para el periodo {periodo}")
                         exito = True
-            except mysql.connector.Error as err:
+            except sqlite3.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error BD", f"Error al asignar: {err}")
                 return False
@@ -2238,6 +2696,10 @@ class VentanaGestion:
         return False
 
     def actualizar_vista_previa(self, event=None, mostrar_todo=False):
+        if self._after_busqueda_asignaciones_id is not None:
+            self.ventana.after_cancel(self._after_busqueda_asignaciones_id)
+            self._after_busqueda_asignaciones_id = None
+
         if mostrar_todo:
             estado_filtro = "Todos"
             texto_busqueda = ""
@@ -2249,8 +2711,9 @@ class VentanaGestion:
 
         tabla = self.tabla_asignaciones if hasattr(self, 'tabla_asignaciones') else None
         if tabla:
-            for item in tabla.get_children():
-                tabla.delete(item)
+            children = tabla.get_children()
+            if children:
+                tabla.delete(*children)
 
         with obtener_cursor() as ctx:
             if ctx is None:
@@ -2311,7 +2774,7 @@ class VentanaGestion:
                 elif tabla:
                     tabla.insert('', 'end', iid="no_results", values=("(No hay resultados)", "", ""))
 
-            except mysql.connector.Error as err:
+            except sqlite3.Error as err:
                 if tabla:
                     tabla.insert('', 'end', iid="error_bd", values=(f"Error BD: {err}", "", ""))
 
@@ -2559,6 +3022,347 @@ class VentanaGestion:
             messagebox.showinfo("Éxito", f"Reporte Excel guardado exitosamente en:\n{ruta_completa}")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo generar el Excel:\n{e}")
+
+    def _dia_a_indice_previa(self, dia):
+        dia_normalizado = self._normalizar_dia(dia)
+        if dia_normalizado.isdigit():
+            indice = int(dia_normalizado)
+            return indice if 0 <= indice < len(self.NOMBRES_DIAS) else None
+        for indice, nombre in enumerate(self.NOMBRES_DIAS):
+            if self._normalizar_dia(nombre) == dia_normalizado:
+                return indice
+        return None
+
+    @staticmethod
+    def _minutos_hora_previa(hora):
+        if isinstance(hora, datetime.timedelta):
+            segundos = int(hora.total_seconds())
+            return (segundos // 3600) * 60 + (segundos % 3600) // 60
+        if isinstance(hora, datetime.time):
+            return hora.hour * 60 + hora.minute
+        partes = str(hora).split(':')
+        try:
+            return int(partes[0]) * 60 + int(partes[1])
+        except (ValueError, IndexError):
+            return None
+
+    def _detectar_choques_grupo(self, grupo_id, materia_id, dias, hora_i, hora_f):
+        inicio = self._minutos_hora_previa(hora_i)
+        fin = self._minutos_hora_previa(hora_f)
+        dias_propuestos = {
+            indice for indice in (self._dia_a_indice_previa(dia) for dia in dias)
+            if indice is not None
+        }
+        if inicio is None or fin is None or fin <= inicio or not dias_propuestos:
+            return []
+
+        choques = []
+        with obtener_cursor_dict() as ctx:
+            if ctx is None:
+                raise RuntimeError("No hay conexión a la base de datos para validar el horario.")
+            cur, conn = ctx
+            cur.execute(
+                """
+                SELECT a.asignacion_id, a.dias, a.hora_inicio AS asignacion_inicio,
+                       a.hora_fin AS asignacion_fin, m.nombre AS materia,
+                       h.dia AS horario_dia, h.hora_inicio AS horario_inicio,
+                       h.hora_fin AS horario_fin
+                FROM asignaciones a
+                LEFT JOIN materias m ON m.materia_id = a.materia_id
+                LEFT JOIN horarios h ON h.asignacion_id = a.asignacion_id
+                WHERE a.grupo_id = %s
+                  AND a.materia_id <> %s
+                  AND (a.estado IS NULL OR a.estado != 'cancelada')
+                """,
+                (grupo_id, materia_id)
+            )
+            for fila in cur.fetchall():
+                if fila['horario_dia'] is not None:
+                    horarios_existentes = [{
+                        "dia": fila['horario_dia'],
+                        "inicio": fila['horario_inicio'],
+                        "fin": fila['horario_fin']
+                    }]
+                else:
+                    horarios_existentes = [
+                        {
+                            "dia": dia.strip(),
+                            "inicio": fila['asignacion_inicio'],
+                            "fin": fila['asignacion_fin']
+                        }
+                        for dia in (fila.get('dias') or "").split(',')
+                        if dia.strip()
+                    ]
+
+                for horario in horarios_existentes:
+                    indice_dia = self._dia_a_indice_previa(horario['dia'])
+                    inicio_existente = self._minutos_hora_previa(horario['inicio'])
+                    fin_existente = self._minutos_hora_previa(horario['fin'])
+                    if (
+                        indice_dia in dias_propuestos
+                        and inicio_existente is not None
+                        and fin_existente is not None
+                        and inicio < fin_existente
+                        and fin > inicio_existente
+                    ):
+                        choques.append({
+                            "dia": self.NOMBRES_DIAS[indice_dia],
+                            "inicio": horario['inicio'],
+                            "fin": horario['fin'],
+                            "materia": fila.get('materia') or "Materia sin nombre"
+                        })
+        return choques
+
+    def _seleccionar_grupo_previa(self, grupo_id):
+        if hasattr(self, '_sv_filtro_semestre_vp'):
+            self._sv_filtro_semestre_vp.set("Todos")
+        if hasattr(self, 'combo_estado_filtro'):
+            self.combo_estado_filtro.set("Todos")
+        if hasattr(self, 'sv_busqueda_asignaciones'):
+            self.sv_busqueda_asignaciones.set("")
+        grupos = list(self.combo_filtro_grupo_vp['values'])
+        if grupo_id not in grupos:
+            grupos.append(grupo_id)
+            self.combo_filtro_grupo_vp['values'] = grupos
+        self._sv_filtro_grupo_vp.set(grupo_id)
+
+    def _cargar_previa_horario_grupo(self):
+        if not hasattr(self, 'canvas_previa_horario'):
+            return
+        grupo_id = self._sv_filtro_grupo_vp.get().strip()
+        self._grupo_previa_datos = []
+        self._grupo_previa_error = None
+        if not grupo_id or grupo_id == "Todos":
+            self._actualizar_previa_horario_grupo()
+            return
+
+        try:
+            with obtener_cursor_dict() as ctx:
+                if ctx is None:
+                    raise RuntimeError("No hay conexión a la base de datos.")
+                cur, conn = ctx
+                cur.execute(
+                    """
+                    SELECT a.asignacion_id, a.dias, a.hora_inicio, a.hora_fin,
+                           a.estado, m.nombre AS materia, p.nombre AS profesor,
+                           h.dia AS horario_dia, h.hora_inicio AS horario_inicio,
+                           h.hora_fin AS horario_fin, h.salon_id
+                    FROM asignaciones a
+                    LEFT JOIN materias m ON m.materia_id = a.materia_id
+                    LEFT JOIN profesores p ON p.profesor_id = a.profesor_id
+                    LEFT JOIN horarios h ON h.asignacion_id = a.asignacion_id
+                    WHERE a.grupo_id = %s
+                      AND (a.estado IS NULL OR a.estado != 'cancelada')
+                    ORDER BY a.asignacion_id
+                    """,
+                    (grupo_id,)
+                )
+                filas = cur.fetchall()
+
+            ids_con_horario = set()
+            for fila in filas:
+                if fila['horario_dia'] is None:
+                    continue
+                indice_dia = self._dia_a_indice_previa(fila['horario_dia'])
+                inicio = self._minutos_hora_previa(fila['horario_inicio'])
+                fin = self._minutos_hora_previa(fila['horario_fin'])
+                if indice_dia is None or inicio is None or fin is None or fin <= inicio:
+                    continue
+                ids_con_horario.add(fila['asignacion_id'])
+                self._grupo_previa_datos.append({
+                    "dia": indice_dia,
+                    "inicio": inicio,
+                    "fin": fin,
+                    "materia": fila.get('materia') or "Materia sin nombre",
+                    "profesor": fila.get('profesor') or "Profesor sin nombre",
+                    "salon": fila.get('salon_id') or "Sin salón",
+                    "propuesta": False
+                })
+
+            for fila in filas:
+                if fila['asignacion_id'] in ids_con_horario:
+                    continue
+                inicio = self._minutos_hora_previa(fila['hora_inicio'])
+                fin = self._minutos_hora_previa(fila['hora_fin'])
+                if inicio is None or fin is None or fin <= inicio:
+                    continue
+                dias = [dia.strip() for dia in (fila.get('dias') or "").split(',')]
+                for dia in dias:
+                    indice_dia = self._dia_a_indice_previa(dia)
+                    if indice_dia is None:
+                        continue
+                    self._grupo_previa_datos.append({
+                        "dia": indice_dia,
+                        "inicio": inicio,
+                        "fin": fin,
+                        "materia": fila.get('materia') or "Materia sin nombre",
+                        "profesor": fila.get('profesor') or "Profesor sin nombre",
+                        "salon": "Pendiente",
+                        "propuesta": True
+                    })
+        except (sqlite3.Error, RuntimeError, KeyError, TypeError, ValueError) as err:
+            self._grupo_previa_error = str(err)
+        self._actualizar_previa_horario_grupo()
+
+    def _actualizar_previa_horario_grupo(self):
+        for canvas in (
+            getattr(self, 'canvas_previa_horario', None),
+            getattr(self, '_canvas_previa_ampliada', None)
+        ):
+            if canvas is not None and canvas.winfo_exists():
+                self._dibujar_previa_horario_grupo(canvas)
+
+    def _abrir_previa_horario_ajustada(self):
+        ventana_existente = getattr(self, '_ventana_previa_ampliada', None)
+        if ventana_existente is not None and ventana_existente.winfo_exists():
+            ventana_existente.deiconify()
+            ventana_existente.lift()
+            return
+
+        ventana = tk.Toplevel(self.ventana)
+        ventana.title("Horario del grupo - Vista ajustada")
+        ancho = max(640, int(ventana.winfo_screenwidth() * 0.95))
+        alto = max(480, int(ventana.winfo_screenheight() * 0.88))
+        x = max(0, (ventana.winfo_screenwidth() - ancho) // 2)
+        y = max(0, (ventana.winfo_screenheight() - alto) // 2)
+        ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
+        ventana.minsize(640, 480)
+        canvas = tk.Canvas(ventana, background='white', highlightthickness=0)
+        canvas.pack(fill='both', expand=True, padx=8, pady=8)
+        self._ventana_previa_ampliada = ventana
+        self._canvas_previa_ampliada = canvas
+        canvas.bind(
+            '<Configure>',
+            lambda event: self._dibujar_previa_horario_grupo(canvas)
+        )
+
+        def cerrar():
+            self._ventana_previa_ampliada = None
+            self._canvas_previa_ampliada = None
+            ventana.destroy()
+
+        ventana.protocol("WM_DELETE_WINDOW", cerrar)
+        self._dibujar_previa_horario_grupo(canvas)
+
+    def _dibujar_previa_horario_grupo(self, canvas=None):
+        if canvas is None:
+            canvas = getattr(self, 'canvas_previa_horario', None)
+        if canvas is None:
+            return
+        canvas.delete('all')
+        width = max(canvas.winfo_width(), 360)
+        height = max(canvas.winfo_height(), 320)
+        label_width = min(max(width * 0.12, 70), 110)
+        title_height = 24
+        header_height = min(max(height * 0.045, 22), 32)
+        start_minutes = 7 * 60
+        end_minutes = 21 * 60 + 30
+        slots = (end_minutes - start_minutes) // 30
+        day_width = max(1, (width - label_width) / len(self.NOMBRES_DIAS))
+        row_height = max(12, (height - title_height - header_height - 8) / slots)
+        selected_group = self._sv_filtro_grupo_vp.get().strip()
+
+        if not selected_group or selected_group == "Todos":
+            canvas.create_text(
+                width / 2, 18, text="Selecciona un grupo para ver su horario.",
+                fill='#333333', font=('Arial', 9)
+            )
+            return
+        if getattr(self, '_grupo_previa_error', None):
+            canvas.create_text(
+                8, 18, anchor='w',
+                text=f"No se pudo cargar el horario: {self._grupo_previa_error}",
+                fill='#9B1C1C', font=('Arial', 9)
+            )
+            return
+
+        canvas.create_text(
+            width / 2, title_height / 2, text=f"Grupo: {selected_group}",
+            fill='#172414',
+            font=('Arial', int(min(14, max(10, day_width / 7))), 'bold')
+        )
+        top = title_height
+        canvas.create_rectangle(
+            0, top, label_width, top + header_height,
+            fill='#1A1A1A', outline='#111111'
+        )
+        canvas.create_text(
+            label_width / 2, top + header_height / 2,
+            text="Hora", fill='white',
+            font=('Arial', int(min(10, max(7, header_height * 0.35))), 'bold')
+        )
+        for indice, dia in enumerate(self.NOMBRES_DIAS):
+            x0 = label_width + indice * day_width
+            canvas.create_rectangle(
+                x0, top, x0 + day_width, top + header_height,
+                fill='#2F4A23', outline='#111111'
+            )
+            canvas.create_text(
+                x0 + day_width / 2, top + header_height / 2,
+                text=dia[:3], fill='white',
+                font=('Arial', int(min(10, max(7, min(day_width / 7, header_height * 0.35)))), 'bold')
+            )
+
+        grid_top = top + header_height
+        for slot in range(slots):
+            y0 = grid_top + slot * row_height
+            hora_inicio = start_minutes + slot * 30
+            hora_fin = hora_inicio + 30
+            canvas.create_rectangle(
+                0, y0, label_width, y0 + row_height,
+                fill='#1A1A1A', outline='#333333'
+            )
+            canvas.create_text(
+                label_width / 2, y0 + row_height / 2,
+                text=f"{hora_inicio // 60:02d}:{hora_inicio % 60:02d} - "
+                     f"{hora_fin // 60:02d}:{hora_fin % 60:02d}",
+                fill='white', font=('Arial', int(min(8, max(5, row_height * 0.3))))
+            )
+            for indice in range(len(self.NOMBRES_DIAS)):
+                x0 = label_width + indice * day_width
+                canvas.create_rectangle(
+                    x0, y0, x0 + day_width, y0 + row_height,
+                    fill='white', outline='#777777', width=1
+                )
+
+        for bloque in getattr(self, '_grupo_previa_datos', []):
+            inicio = max(bloque['inicio'], start_minutes)
+            fin = min(bloque['fin'], end_minutes)
+            if fin <= inicio:
+                continue
+            x0 = label_width + bloque['dia'] * day_width + 1
+            x1 = label_width + (bloque['dia'] + 1) * day_width - 1
+            y0 = grid_top + ((inicio - start_minutes) / 30) * row_height + 1
+            y1 = grid_top + ((fin - start_minutes) / 30) * row_height - 1
+            color = '#DCEBFA' if bloque['propuesta'] else '#E8F0E3'
+            canvas.create_rectangle(x0, y0, x1, y1, fill=color, outline='#263238', width=1)
+            inicio_txt = f"{bloque['inicio'] // 60:02d}:{bloque['inicio'] % 60:02d}"
+            fin_txt = f"{bloque['fin'] // 60:02d}:{bloque['fin'] % 60:02d}"
+            salon_txt = "Propuesta" if bloque['propuesta'] else f"Salón: {bloque['salon']}"
+            alto_bloque = y1 - y0
+            tamano_fuente = int(min(8, max(5, min(day_width / 9, alto_bloque / 5))))
+            caracteres_linea = max(5, int((day_width - 8) / (tamano_fuente * 0.62)))
+            texto = "\n".join(
+                textwrap.shorten(str(linea), width=caracteres_linea, placeholder="...")
+                for linea in (bloque['materia'], bloque['profesor'], salon_txt)
+            )
+            if alto_bloque < 25:
+                texto = textwrap.shorten(
+                    str(bloque['materia']),
+                    width=caracteres_linea,
+                    placeholder="..."
+                )
+            canvas.create_text(
+                (x0 + x1) / 2, y0 + alto_bloque * 0.58,
+                text=texto, fill='#111111', width=max(20, x1 - x0 - 4),
+                font=('Arial', tamano_fuente), justify='center'
+            )
+            if alto_bloque >= 25:
+                canvas.create_text(
+                    (x0 + x1) / 2, y0 + min(6, alto_bloque * 0.2),
+                    text=f"{inicio_txt}-{fin_txt}",
+                    fill='#263238', font=('Arial', max(4, tamano_fuente - 1))
+                )
 
     def actualizar_tabla_grafica(self, modo_impresion=False):
         self.ax.clear()

@@ -1,60 +1,40 @@
-import mysql.connector
+import sqlite3
 
-conn = mysql.connector.connect(
-    host="localhost", user="root", password="123456",
-    database="bd_seso", port='3306'
-)
-cur = conn.cursor(dictionary=True)
+from src.conexion import get_conexion, get_ruta_base_datos
 
-print("=== 1) SHOW CREATE TABLE horarios ===")
-cur.execute("SHOW CREATE TABLE horarios")
-row = cur.fetchone()
-print(row['Create Table'])
 
-print("\n=== 2) SHOW TRIGGERS ===")
-cur.execute("SHOW TRIGGERS")
-triggers = cur.fetchall()
-if triggers:
-    for t in triggers:
-        print(f"  Trigger: {t['Trigger']}")
-        print(f"  Event: {t['Event']}")
-        print(f"  Table: {t['Table']}")
-        print(f"  Statement: {t['Statement'][:200]}")
-        print()
-else:
-    print("  (no triggers)")
+def main():
+    conn = get_conexion()
+    if conn is None:
+        print("No se pudo abrir la base de datos SQLite.")
+        return 1
 
-print("\n=== 3) SHOW COLUMNS FROM horarios ===")
-cur.execute("SHOW COLUMNS FROM horarios")
-for row in cur.fetchall():
-    print(f"  {row['Field']:20} {row['Type']:30} {row['Extra']}")
+    try:
+        print(f"Base de datos: {get_ruta_base_datos()}")
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(horarios)")
+        print("\n=== Columnas de horarios ===")
+        for columna in cursor.fetchall():
+            print(f"  {columna['name']}: {columna['type']}")
 
-print("\n=== 4) DATA ACTUAL EN HORARIOS ===")
-cur.execute("SELECT horario_id, salon_id, HEX(dia) AS dia_hex, dia, hora_inicio, hora_fin FROM horarios ORDER BY horario_id")
-for row in cur.fetchall():
-    print(f"  id={row['horario_id']} salon={row['salon_id']!r} dia_hex={row['dia_hex']!r} dia={row['dia']!r} ini={row['hora_inicio']} fin={row['hora_fin']}")
+        cursor.execute("SELECT COUNT(*) FROM horarios")
+        print(f"\nRegistros en horarios: {cursor.fetchone()[0]}")
 
-print("\n=== 5) INSERT MANUAL DE PRUEBA ===")
-try:
-    cur.execute("INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin) VALUES (1, 'f18', 'TEST0', '07:00:00', '09:00:00')")
-    conn.commit()
-    print("  Insertado con dia='TEST0'")
-    cur.execute("SELECT horario_id, salon_id, HEX(dia) AS dia_hex, dia FROM horarios WHERE dia = 'TEST0'")
-    row = cur.fetchone()
-    if row:
-        print(f"  LEIDO: id={row['horario_id']} dia_hex={row['dia_hex']!r} dia={row['dia']!r}")
-    else:
-        print(f"  NO ENCONTRADO con dia='TEST0', buscando el ultimo insertado...")
-        cur.execute("SELECT horario_id, salon_id, HEX(dia) AS dia_hex, dia FROM horarios ORDER BY horario_id DESC LIMIT 1")
-        row = cur.fetchone()
-        if row:
-            print(f"  LEIDO: id={row['horario_id']} dia_hex={row['dia_hex']!r} dia={row['dia']!r}")
-except Exception as e:
-    print(f"  ERROR: {e}")
+        cursor.execute("PRAGMA foreign_key_check")
+        violaciones = cursor.fetchall()
+        if violaciones:
+            print(f"Referencias inválidas: {len(violaciones)}")
+            for violacion in violaciones[:10]:
+                print(f"  {tuple(violacion)}")
+        else:
+            print("Integridad de claves foráneas: correcta")
+    except sqlite3.Error as err:
+        print(f"Error al diagnosticar la base SQLite: {err}")
+        return 1
+    finally:
+        conn.close()
+    return 0
 
-print("\n=== 6) PROFESOR_DISPONIBILIDAD para P1116 ===")
-cur.execute("SELECT id, HEX(dia) AS dia_hex, dia, hora_inicio, hora_fin FROM profesor_disponibilidad WHERE profesor_id='P1116' ORDER BY id")
-for row in cur.fetchall():
-    print(f"  id={row['id']} dia_hex={row['dia_hex']!r} dia={row['dia']!r} ini={row['hora_inicio']} fin={row['hora_fin']}")
 
-conn.close()
+if __name__ == "__main__":
+    raise SystemExit(main())

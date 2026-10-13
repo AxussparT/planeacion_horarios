@@ -7,10 +7,8 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         ('src/UI/SAGA.png', 'src/UI'),
-        ('config_default.json', '.'),
     ],
     hiddenimports=[
-        'mysql.connector',
         'PIL',
         'PIL._tkinter_finder',
         'matplotlib',

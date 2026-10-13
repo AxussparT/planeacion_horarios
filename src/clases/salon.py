@@ -1,22 +1,29 @@
 from src.conexion import get_conexion
 from tkinter import messagebox
-import mysql.connector
+import sqlite3
 
 class salon:
     def __init__(self, numero_aula, capacidad, tipo):
-        self.numero_aula = str(numero_aula).strip()
+        self.numero_aula = str(numero_aula).strip().upper()
         self.capacidad = str(capacidad).strip()
-        self.tipo = str(tipo).strip()
-        
-        if not self.capacidad.isdigit():
-            messagebox.showerror("Error de Datos", "La capacidad debe ser un número válido.")
+        self.tipo = str(tipo).strip().upper()
+        self.exito = False
+
+        if not self.numero_aula or len(self.numero_aula) > 4:
+            messagebox.showerror("Error de Datos", "El número de aula es obligatorio y debe tener hasta 4 caracteres.")
+            return
+        if (
+            not self.capacidad.isascii()
+            or not self.capacidad.isdigit()
+            or len(self.capacidad) > 3
+        ):
+            messagebox.showerror("Error de Datos", "La capacidad debe ser un número entero de hasta 3 dígitos.")
+            return
+        if not self.tipo or len(self.tipo) > 50:
+            messagebox.showerror("Error de Datos", "El tipo de salón es obligatorio y no puede exceder 50 caracteres.")
             return
         
-        if not self.numero_aula:
-            messagebox.showerror("Error de Datos", "El número de aula es obligatorio.")
-            return
-        
-        self.procesar_datos()
+        self.exito = self.procesar_datos()
         
     def procesar_datos(self):
         from src.conexion import obtener_cursor
@@ -29,7 +36,7 @@ class salon:
                 cur.execute(sql, (self.numero_aula, self.capacidad, self.tipo))
                 messagebox.showinfo("Éxito", f"Salón '{self.numero_aula}' guardado correctamente")
                 return True
-            except mysql.connector.Error as err:
+            except sqlite3.Error as err:
                 conn.rollback()
                 messagebox.showerror("Error", f"Error al guardar el salón: {err}")
                 return False

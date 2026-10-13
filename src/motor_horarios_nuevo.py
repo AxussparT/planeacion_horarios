@@ -1,4 +1,3 @@
-import mysql.connector
 import datetime
 import math
 import unicodedata

@@ -1,6 +1,6 @@
 from src.conexion import get_conexion
 from tkinter import messagebox
-import mysql.connector
+import sqlite3
 import re
 
 def formatear_hora(hora_str):
@@ -23,10 +23,24 @@ def _generar_profesor_id(cursor):
     next_num = (max_id if max_id else 0) + 1
     return f"P{next_num:04d}"
 
-def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos):
+def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos, correo_institucional=None):
     conexion = None
     cursor = None
     transaccion_exitosa = False
+    no_cuenta = str(no_cuenta).strip()
+    nombre_completo = str(nombre_completo).strip().upper()
+    if correo_institucional:
+        correo_institucional = correo_institucional.strip() or None
+
+    if not no_cuenta.isascii() or not no_cuenta.isdigit() or len(no_cuenta) > 10:
+        messagebox.showerror("Error de Datos", "El número de cuenta debe contener de 1 a 10 dígitos.")
+        return False
+    if not nombre_completo or len(nombre_completo) > 255:
+        messagebox.showerror("Error de Datos", "El nombre del profesor es obligatorio y no puede exceder 255 caracteres.")
+        return False
+    if correo_institucional and len(correo_institucional) > 255:
+        messagebox.showerror("Error de Datos", "El correo institucional no puede exceder 255 caracteres.")
+        return False
 
     try:
         conexion = get_conexion()
@@ -43,10 +57,11 @@ def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos):
             profesor_id = existente[0]
             cursor.execute("""
                 UPDATE profesores
-                SET nombre = %s
+                SET nombre = %s, correo_institucional = %s
                 WHERE profesor_id = %s
             """, (
                 nombre_completo,
+                correo_institucional,
                 profesor_id
             ))
 
@@ -67,10 +82,10 @@ def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos):
         else:
             profesor_id = _generar_profesor_id(cursor)
             cursor.execute("""
-                INSERT INTO profesores (profesor_id, no_cuenta, nombre, disponible_inicio, disponible_fin, dias_disponibles, en_linea)
-                VALUES (%s, %s, %s, '00:00:00', '00:00:00', '', 'NO')
+                INSERT INTO profesores (profesor_id, no_cuenta, nombre, correo_institucional, disponible_inicio, disponible_fin, dias_disponibles, en_linea)
+                VALUES (%s, %s, %s, %s, '00:00:00', '00:00:00', '', 'NO')
             """, (
-                profesor_id, no_cuenta, nombre_completo
+                profesor_id, no_cuenta, nombre_completo, correo_institucional
             ))
 
             sql_insert_disp = """INSERT INTO profesor_disponibilidad (profesor_id, dia, hora_inicio, hora_fin)
@@ -86,7 +101,7 @@ def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos):
             transaccion_exitosa = True
             return True
 
-    except mysql.connector.Error as err:
+    except sqlite3.Error as err:
         messagebox.showerror("Error de BD", f"Error al procesar los datos del profesor: {err}")
         return False
 
