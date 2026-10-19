@@ -2522,52 +2522,137 @@ class VentanaGestion:
     # --- LÓGICA DE NEGOCIO ---
     
     def borrar_asignacion_seleccionada(self):
-        if not self.asignacion_seleccionada_id:
-            messagebox.showwarning("Aviso", "Primero selecciona una asignación de la tabla de la derecha.")
+        """
+        Elimina la(s) asignación(es) seleccionada(s) en la tabla de vista previa.
+        Permite selección única o múltiple de filas.
+        """
+        seleccionados = self.tabla_asignaciones.selection()
+        if not seleccionados:
+            if self.asignacion_seleccionada_id and self.asignacion_seleccionada_id not in ("no_results", "error_bd"):
+                seleccionados = [self.asignacion_seleccionada_id]
+            else:
+                messagebox.showwarning("Aviso", "Primero selecciona una o más asignaciones de la tabla.")
+                return
+
+        ids_a_borrar = [s for s in seleccionados if s not in ("no_results", "error_bd")]
+        if not ids_a_borrar:
             return
 
-        if messagebox.askyesno("Confirmar", "¿Estás seguro de eliminar esta asignación?\n\nSe liberará el espacio del salón para que otra asignación pendiente pueda usarlo."):
-            with obtener_cursor() as ctx:
-                if ctx is None:
-                    return
-                cur, conn = ctx
-                try:
-                    cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
-                    cur.execute("DELETE FROM asignaciones WHERE asignacion_id = %s", (self.asignacion_seleccionada_id,))
-                    messagebox.showinfo("Éxito", "Asignación eliminada correctamente.")
-                    self.asignacion_seleccionada_id = None 
-                    self.actualizar_vista_previa()
-                    self._cargar_previa_horario_grupo()
-                    self._cargar_tensor_diferido()
-                except Exception as e:
-                    conn.rollback()
-                    messagebox.showerror("Error", f"No se pudo borrar: {e}")
+        total = len(ids_a_borrar)
+        texto_pregunta = f"¿Estás seguro de eliminar {total} asignación(es)?\n\nSe liberarán sus horarios y espacios de aula." if total > 1 else "¿Estás seguro de eliminar esta asignación?\n\nSe liberará su horario y espacio de aula."
+
+        if not messagebox.askyesno("Confirmar Eliminación", texto_pregunta):
+            return
+
+        self._ejecutar_eliminacion_en_hilo(
+            titulo="Liberando asignación(es)...",
+            mensaje=f"Eliminando {total} asignación(es) seleccionada(s)...",
+            es_total=False,
+            ids=ids_a_borrar
+        )
 
     def formatear_asignaciones(self):
-        if messagebox.askyesno("¡ADVERTENCIA CRÍTICA!", "¿Estás ABSOLUTAMENTE SEGURO de querer borrar TODAS las asignaciones guardadas?\n\nEsto vaciará por completo la base de datos de horarios. No se puede deshacer."):
-            with obtener_cursor() as ctx:
-                if ctx is None:
-                    return
-                cur, conn = ctx
+        """
+        Borra todas las asignaciones y horarios guardados en la base de datos de manera
+        asíncrona con barra de progreso, evitando congelar la interfaz.
+        """
+        if not messagebox.askyesno(
+            "¡ADVERTENCIA CRÍTICA!",
+            "¿Estás ABSOLUTAMENTE SEGURO de querer borrar TODAS las asignaciones guardadas?\n\n"
+            "Esto vaciará por completo la base de datos de horarios y asignaciones. "
+            "No se puede deshacer."
+        ):
+            return
+
+        self._ejecutar_eliminacion_en_hilo(
+            titulo="Borrando todas las asignaciones...",
+            mensaje="Vaciando la base de datos de horarios y asignaciones...",
+            es_total=True
+        )
+
+    def _ejecutar_eliminacion_en_hilo(self, titulo, mensaje, es_total=False, ids=None):
+        """
+        Ejecuta la eliminación en segundo plano (hilo) con ventana modal y barra de progreso.
+        """
+        self._en_operacion = True
+        loading = tk.Toplevel(self.ventana)
+        loading.title(titulo)
+        loading.geometry("380x130")
+        loading.transient(self.ventana)
+        loading.grab_set()
+        loading.resizable(False, False)
+
+        ttk.Label(loading, text=mensaje, font=("Roboto", 11), wraplength=340).pack(pady=(15, 8))
+        progress = ttk.Progressbar(loading, mode='indeterminate', length=320)
+        progress.pack(pady=6)
+        progress.start(10)
+        loading.update()
+
+        def tarea():
+            result_queue = queue.Queue()
+            try:
+                with obtener_cursor() as ctx:
+                    if not ctx:
+                        result_queue.put(("error", "No hay conexión a la base de datos"))
+                        return
+                    cur, conn = ctx
+                    if es_total:
+                        cur.execute("DELETE FROM horarios")
+                        cur.execute("DELETE FROM asignaciones")
+                        try: cur.execute("DELETE FROM sqlite_sequence WHERE name IN ('horarios', 'asignaciones')")
+                        except Exception: pass
+                    else:
+                        for chunk_start in range(0, len(ids), 200):
+                            chunk = ids[chunk_start:chunk_start + 200]
+                            placeholders = ', '.join(['%s'] * len(chunk))
+                            cur.execute(f"DELETE FROM horarios WHERE asignacion_id IN ({placeholders})", chunk)
+                            cur.execute(f"DELETE FROM asignaciones WHERE asignacion_id IN ({placeholders})", chunk)
+
+                    conn.commit()
+                result_queue.put(("ok", None))
+            except Exception as e:
+                result_queue.put(("error", str(e)))
+
+            def procesar_resultado():
+                self._en_operacion = False
                 try:
-                    cur.execute("DELETE FROM horarios")
-                    cur.execute("DELETE FROM asignaciones")
-                    try: cur.execute("ALTER TABLE horarios AUTO_INCREMENT = 1")
-                    except: pass
-                    try: cur.execute("ALTER TABLE asignaciones AUTO_INCREMENT = 1")
-                    except: pass
-                    messagebox.showinfo("Éxito", "La base de datos de asignaciones ha sido limpiada.")
-                    self.asignacion_seleccionada_id = None
-                    self.actualizar_vista_previa()
-                    self._cargar_previa_horario_grupo()
+                    loading.destroy()
+                except Exception:
+                    pass
+
+                try:
+                    tipo, err = result_queue.get_nowait()
+                except queue.Empty:
+                    tipo, err = "error", "No se recibió respuesta."
+
+                if tipo == "error":
+                    messagebox.showerror("Error", f"Ocurrió un error al eliminar: {err}")
+                    return
+
+                self.asignacion_seleccionada_id = None
+                self._materia_grupo_seleccionada_id = None
+
+                # Actualizar todos los componentes visuales
+                self.actualizar_vista_previa(mostrar_todo=True)
+                if hasattr(self, '_cargar_materias_grupo_gestion'):
+                    self._cargar_materias_grupo_gestion()
+                self._cargar_previa_horario_grupo()
+                self._cargar_tensor_diferido(forzar=True)
+
+                if es_total:
                     if self._profesor_id_seleccionado:
                         for item in self._periodos_frame.winfo_children():
                             item.destroy()
                         self._periodos_asignacion.clear()
                         self._cargar_periodos_desde_bd()
-                except Exception as e:
-                    conn.rollback()
-                    messagebox.showerror("Error", f"Ocurrió un error al formatear: {e}")
+                    messagebox.showinfo("Éxito", "Todas las asignaciones y horarios han sido eliminados correctamente.")
+                else:
+                    messagebox.showinfo("Éxito", f"Se eliminaron {len(ids)} asignación(es) correctamente.")
+
+            self.ventana.after(0, procesar_resultado)
+
+        hilo = threading.Thread(target=tarea, daemon=True)
+        hilo.start()
 
     def cargar_asignacion_seleccionada(self, event):
         item = self.tabla_asignaciones.focus()
