@@ -142,7 +142,7 @@ class VentanaPrincipal:
 
         ttk.Label(mf_frame, text="Prioridad:", style='fondo.TLabel').grid(row=4, column=0, sticky='w', pady=4)
         self.combo_preferencia = ttk.Combobox(mf_frame, width=32, font=self._fuente_label, state='readonly')
-        self.combo_preferencia['values'] = ("Normal", "Tecnológica", "Laboratorio", "Auditorio")
+        self.combo_preferencia['values'] = ("Normal", "Laboratorio de computación", "Laboratorio", "Auditorio")
         self.combo_preferencia.grid(row=4, column=1, sticky='ew', padx=(12, 0), pady=4)
         mf_frame.columnconfigure(1, weight=1)
 
@@ -167,7 +167,7 @@ class VentanaPrincipal:
 
         ttk.Label(sf_frame, text="Tipo de aula:", style='fondo.TLabel').grid(row=2, column=0, sticky='w', pady=4)
         self.combo_tipo = ttk.Combobox(sf_frame, width=32, font=self._fuente_label, state='readonly')
-        self.combo_tipo['values'] = ("Normal", "Tecnológica", "Laboratorio", "Auditorio")
+        self.combo_tipo['values'] = ("Normal", "Laboratorio de computación", "Laboratorio", "Auditorio")
         self.combo_tipo.grid(row=2, column=1, sticky='ew', padx=(12, 0), pady=4)
         sf_frame.columnconfigure(1, weight=1)
 
@@ -355,6 +355,36 @@ class VentanaPrincipal:
 
     # =================== MÉTODOS UI ===================
 
+    @staticmethod
+    def _ui_tipo_materia_salon(tipo_db):
+        if not tipo_db:
+            return "Normal"
+        t = str(tipo_db).strip().upper()
+        if t in ("TECNOLOGICA", "TECNOLÓGICA", "LABORATORIO DE COMPUTACION", "LABORATORIO DE COMPUTACIÓN"):
+            return "Laboratorio de computación"
+        elif t == "LABORATORIO":
+            return "Laboratorio"
+        elif t == "AUDITORIO":
+            return "Auditorio"
+        elif t == "NORMAL":
+            return "Normal"
+        return str(tipo_db).title()
+
+    @staticmethod
+    def _db_tipo_materia_salon(tipo_ui):
+        if not tipo_ui:
+            return "NORMAL"
+        t = str(tipo_ui).strip().upper()
+        if t in ("LABORATORIO DE COMPUTACION", "LABORATORIO DE COMPUTACIÓN", "TECNOLOGICA", "TECNOLÓGICA"):
+            return "TECNOLOGICA"
+        elif t == "LABORATORIO":
+            return "LABORATORIO"
+        elif t == "AUDITORIO":
+            return "AUDITORIO"
+        elif t == "NORMAL":
+            return "NORMAL"
+        return t
+
     def cargar_materia_seleccionada(self, event):
         item = self.tabla_materias.focus()
         if not item:
@@ -366,7 +396,7 @@ class VentanaPrincipal:
         self.entry_materia_horas.insert(0, v[2])
         self.entry_materia_semestre.insert(0, v[3])
         if len(v) > 4:
-            self.combo_preferencia.set(v[4])
+            self.combo_preferencia.set(self._ui_tipo_materia_salon(v[4]))
 
     def _crear_campo(self, parent, label, attr, row):
         ttk.Label(parent, text=label, style='fondo.TLabel').grid(row=row, column=0, sticky='w', pady=4)
@@ -1038,7 +1068,7 @@ class VentanaPrincipal:
         n = self.entry_materia_nom.get().strip().upper()
         h = self.entry_materia_horas.get().strip()
         s = self.entry_materia_semestre.get().strip()
-        t = self.combo_preferencia.get().strip().upper()
+        t = self._db_tipo_materia_salon(self.combo_preferencia.get())
         if not c or len(c) > 20 or not n or len(n) > 255:
             messagebox.showwarning("Aviso", "La clave es obligatoria (máximo 20 caracteres) y el nombre (máximo 255).")
             return
@@ -1069,7 +1099,10 @@ class VentanaPrincipal:
     def refrescar_tabla_mat(self, datos):
         self.tabla_materias.delete(*self.tabla_materias.get_children())
         for d in datos:
-            self.tabla_materias.insert("", "end", values=d)
+            fila = list(d)
+            if len(fila) > 4:
+                fila[4] = self._ui_tipo_materia_salon(fila[4])
+            self.tabla_materias.insert("", "end", values=fila)
 
     def filtrar_materias(self):
         t = self.sv_busqueda_mat.get().lower()
@@ -1095,7 +1128,7 @@ class VentanaPrincipal:
         self.master.update_idletasks()
         aula = self.entry_num_aula.get().strip().upper()
         cap = self.entry_capacidad_aula.get().strip()
-        tipo = self.combo_tipo.get().strip().upper()
+        tipo = self._db_tipo_materia_salon(self.combo_tipo.get())
         if not aula or len(aula) > 4:
             messagebox.showwarning("Aviso", "El número de aula es obligatorio y debe tener hasta 4 caracteres.")
             return
@@ -1122,7 +1155,10 @@ class VentanaPrincipal:
         for r in res:
             if r[0].upper().startswith("MEDIACION_TECNOLOGICA"):
                 continue
-            self.tabla_salones.insert("", "end", values=r)
+            fila = list(r)
+            if len(fila) > 2:
+                fila[2] = self._ui_tipo_materia_salon(fila[2])
+            self.tabla_salones.insert("", "end", values=fila)
 
     def eliminar_salon(self):
         aula_id = self.entry_num_aula.get().strip()
@@ -1161,7 +1197,7 @@ class VentanaPrincipal:
         self.entry_num_aula.insert(0, v[0])
         self.entry_capacidad_aula.insert(0, v[1])
         if len(v) > 2:
-            self.combo_tipo.set(v[2])
+            self.combo_tipo.set(self._ui_tipo_materia_salon(v[2]))
 
     def eliminar_materia(self):
         materia_id = self.entry_materia_clave.get().strip()

@@ -512,14 +512,14 @@ class GeneradorHorarios:
                         salones_priorizados = sorted(salones_aud, key=lambda s: self.uso_salones.get(s, 0))
                     else:
                         salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
-                        salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
+                        salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación'] and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
                         salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
 
                         salones_norm_ordenados = sorted(salones_norm, key=lambda s: self.uso_salones.get(s, 0))
                         salones_tec_ordenados = sorted(salones_tec, key=lambda s: self.uso_salones.get(s, 0))
                         salones_lab_ordenados = sorted(salones_lab, key=lambda s: self.uso_salones.get(s, 0))
 
-                        if tipo_materia in ['tecnológica', 'tecnologica']:
+                        if tipo_materia in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación']:
                             salones_priorizados = salones_tec_ordenados
                         elif tipo_materia == 'laboratorio':
                             salones_priorizados = salones_lab_ordenados + salones_norm_ordenados
@@ -558,7 +558,7 @@ class GeneradorHorarios:
 
                 if not asignado_completamente and tipo_materia == 'laboratorio':
                     salones_norm = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'normal' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
-                    salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica'] and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
+                    salones_tec = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación'] and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
                     salones_lab = [s for s in self.salones if self.tipos_salones.get(s, 'Normal').lower() == 'laboratorio' and not s.upper().startswith("MEDIACION_TECNOLOGICA")]
                     salones_priorizados = sorted(salones_norm + salones_tec + salones_lab, key=lambda s: self.uso_salones.get(s, 0))
                     for salon in salones_priorizados:
@@ -659,7 +659,7 @@ class GeneradorHorarios:
 
                             if tipo_mat == 'laboratorio' and t_salon in ['laboratorio', 'normal']:
                                 salones_compatibles.append(s)
-                            elif tipo_mat in ['tecnológica', 'tecnologica'] and t_salon in ['tecnológica', 'tecnologica']:
+                            elif tipo_mat in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación'] and t_salon in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación']:
                                 salones_compatibles.append(s)
                             elif tipo_mat == 'normal':
                                 salones_compatibles.append(s)
@@ -668,8 +668,8 @@ class GeneradorHorarios:
                             causas.append(f"No hay salones disponibles de tipo '{tipo_mat}' para esta materia.")
                             if tipo_mat == 'laboratorio':
                                 sugerencias.append(f"Registrar salones tipo 'Laboratorio' o cambiar la materia a 'Normal'.")
-                            elif tipo_mat in ['tecnológica', 'tecnologica']:
-                                sugerencias.append(f"Registrar salones tipo 'Tecnológica' o cambiar la materia a 'Normal'.")
+                            elif tipo_mat in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación']:
+                                sugerencias.append(f"Registrar salones tipo 'Laboratorio de computación' o cambiar la materia a 'Normal'.")
                             else:
                                 sugerencias.append("Registrar más salones de tipo 'Normal'.")
 
@@ -726,7 +726,7 @@ class GeneradorHorarios:
                             salones_compatibles.append(s)
                         elif tipo_mat == 'laboratorio' and t_salon in ['laboratorio', 'normal']:
                             salones_compatibles.append(s)
-                        elif tipo_mat in ['tecnológica', 'tecnologica'] and t_salon in ['tecnológica', 'tecnologica']:
+                        elif tipo_mat in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación'] and t_salon in ['tecnológica', 'tecnologica', 'laboratorio de computacion', 'laboratorio de computación']:
                             salones_compatibles.append(s)
                         elif tipo_mat == 'normal':
                             salones_compatibles.append(s)

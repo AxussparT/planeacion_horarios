@@ -2491,8 +2491,8 @@ class VentanaGestion:
                     cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Auditorio' LIMIT 1")
                 elif tipo_materia == 'laboratorio':
                     cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Laboratorio' OR tipo = 'Normal' LIMIT 1")
-                elif tipo_materia in ('tecnologica', 'tecnológica'):
-                    cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Tecnologica' LIMIT 1")
+                elif tipo_materia in ('tecnologica', 'tecnológica', 'laboratorio de computacion', 'laboratorio de computación'):
+                    cur.execute("SELECT salon_id FROM salones WHERE tipo IN ('Tecnologica', 'TECNOLOGICA', 'TECNOLÓGICA', 'Laboratorio de Computacion', 'Laboratorio de computación') LIMIT 1")
                 elif tipo_materia == 'normal':
                     cur.execute("SELECT salon_id FROM salones WHERE tipo = 'Normal' LIMIT 1")
                 else:

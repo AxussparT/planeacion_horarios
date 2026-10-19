@@ -258,7 +258,7 @@ class GeneradorHorarios:
                 resultado.append(s)
             elif tipo_materia == 'laboratorio' and t in ('laboratorio', 'normal'):
                 resultado.append(s)
-            elif tipo_materia in ('tecnologica', 'tecnológica') and t in ('tecnologica', 'tecnológica'):
+            elif tipo_materia in ('tecnologica', 'tecnológica', 'laboratorio de computacion', 'laboratorio de computación') and t in ('tecnologica', 'tecnológica', 'laboratorio de computacion', 'laboratorio de computación'):
                 resultado.append(s)
             elif tipo_materia == 'normal' and t == 'normal':
                 resultado.append(s)
@@ -534,7 +534,7 @@ class GeneradorHorarios:
             key=lambda x: (
                 0 if str(x.get('modalidad', 'Presencial')) != 'Mediacion Tecnologica' else 1,
                 int(x.get('semestre_id', 99)),
-                0 if x.get('tipo_materia', 'Normal').lower() in ('tecnologica', 'tecnológica', 'laboratorio') else 1,
+                0 if x.get('tipo_materia', 'Normal').lower() in ('tecnologica', 'tecnológica', 'laboratorio de computacion', 'laboratorio de computación', 'laboratorio') else 1,
                 -float(x.get('horas_semana', 0))
             )
         )
