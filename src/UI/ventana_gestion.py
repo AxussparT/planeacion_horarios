@@ -407,29 +407,17 @@ class VentanaGestion:
         f_hm_horas = ttk.Frame(self._frame_horario_manual, style='blue.TFrame')
         f_hm_horas.pack(fill='x', padx=6, pady=3)
 
-        ttk.Label(f_hm_horas, text="Hora Inicio:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
-        self.combo_manual_hora_i = ttk.Combobox(
-            f_hm_horas,
-            values=[f"{h:02d}:00" for h in range(7, 18)],
-            state="readonly",
-            width=6,
-            font=self._fuente_label
-        )
-        self.combo_manual_hora_i.set("07:00")
-        self.combo_manual_hora_i.pack(side='left', padx=(0, 8))
+        ttk.Label(f_hm_horas, text="Horario:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
+        f_i, self.entry_manual_hora_i, self.var_manual_hora_i = self._crear_spinner_hora(f_hm_horas, "07:00", actualizar_periodos=False)
+        f_i.pack(side='left', padx=1)
+        self.combo_manual_hora_i = self.var_manual_hora_i
 
-        ttk.Label(f_hm_horas, text="Hora Fin:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
-        self.combo_manual_hora_f = ttk.Combobox(
-            f_hm_horas,
-            values=[f"{h:02d}:00" for h in range(8, 19)],
-            state="readonly",
-            width=6,
-            font=self._fuente_label
-        )
-        self.combo_manual_hora_f.set("09:00")
-        self.combo_manual_hora_f.pack(side='left', padx=(0, 8))
+        ttk.Label(f_hm_horas, text=" - ", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=1)
+        f_f, self.entry_manual_hora_f, self.var_manual_hora_f = self._crear_spinner_hora(f_hm_horas, "09:00", actualizar_periodos=False)
+        f_f.pack(side='left', padx=1)
+        self.combo_manual_hora_f = self.var_manual_hora_f
 
-        ttk.Label(f_hm_horas, text="Aula:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
+        ttk.Label(f_hm_horas, text="Aula:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(8, 2))
         self.combo_manual_aula = ttk.Combobox(
             f_hm_horas,
             values=[],
@@ -843,9 +831,9 @@ class VentanaGestion:
                 if hasattr(self, 'combo_modalidad_vinculo'):
                     self.combo_modalidad_vinculo.set(asig_info.get('modalidad') or 'Presencial')
                 if hasattr(self, 'combo_manual_hora_i') and asig_info.get('hora_inicio'):
-                    self.combo_manual_hora_i.set(asig_info['hora_inicio'])
+                    self.combo_manual_hora_i.set(self._hora_db_a_str(asig_info['hora_inicio']))
                 if hasattr(self, 'combo_manual_hora_f') and asig_info.get('hora_fin'):
-                    self.combo_manual_hora_f.set(asig_info['hora_fin'])
+                    self.combo_manual_hora_f.set(self._hora_db_a_str(asig_info['hora_fin']))
                 if hasattr(self, 'combo_manual_aula') and asig_info.get('salon_id'):
                     aula = asig_info['salon_id'].split(',')[0].strip()
                     if aula and aula != "Sin aula":
@@ -1936,7 +1924,7 @@ class VentanaGestion:
             print(f"Error obteniendo nombre de materia: {e}")
             return None
 
-    def _crear_spinner_hora(self, parent, valor_inicial="07:00"):
+    def _crear_spinner_hora(self, parent, valor_inicial="07:00", actualizar_periodos=True):
         f = ttk.Frame(parent, style='blue.TFrame')
         var = tk.StringVar(value=valor_inicial)
 
@@ -1950,14 +1938,15 @@ class VentanaGestion:
             total_min = h * 60 + m + delta
             total_min = max(7 * 60, min(total_min, 22 * 60))
             var.set(f"{total_min // 60:02d}:{total_min % 60:02d}")
-            if self._debounce_after_id:
-                self.ventana.after_cancel(self._debounce_after_id)
-            self._debounce_after_id = self.ventana.after(1000, self._actualizar_todas_periodos)
+            if actualizar_periodos and hasattr(self, '_actualizar_todas_periodos'):
+                if self._debounce_after_id:
+                    self.ventana.after_cancel(self._debounce_after_id)
+                self._debounce_after_id = self.ventana.after(1000, self._actualizar_todas_periodos)
 
         btn_menos = ttk.Button(f, text="-", width=3, command=lambda: ajustar(-30))
         btn_menos.pack(side='left')
 
-        entry = ttk.Entry(f, textvariable=var, width=7, font=self._fuente_label, justify='center')
+        entry = ttk.Entry(f, textvariable=var, width=8, font=self._fuente_label, justify='center')
         entry.pack(side='left', padx=1)
 
         def on_key(event):
