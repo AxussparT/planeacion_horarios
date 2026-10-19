@@ -22,7 +22,10 @@ class GeneradorPreasignacion:
 
     PAREJAS_DIAS = [
         ("Lunes", "Miércoles"),
-        ("Martes", "Jueves"),
+        ("Martes", "Jueves")
+    ]
+
+    PAREJAS_SECUNDARIAS = [
         ("Miércoles", "Viernes"),
         ("Lunes", "Jueves"),
         ("Martes", "Viernes"),
@@ -174,38 +177,47 @@ class GeneradorPreasignacion:
 
     def _generar_estrategias(self, horas_semana):
         """
-        Divide las horas en patrones simétricos de días y slots (30 min cada slot).
+        Divide las horas en patrones simétricos ordenados estrictamente por prioridad:
+        1. Prioridad máxima: Lunes-Miércoles y Martes-Jueves
+        2. Sesión única intensiva en Viernes o Sábado (ej. de 8 a 12 o bloques continuos)
+        3. Parejas secundarias si no hay cupo
         """
         bloques = int(round(horas_semana * 2))
         if bloques <= 0:
             bloques = 4
 
         estrategias = []
-        if bloques >= 6:
-            mitad1 = math.ceil(bloques / 2)
-            mitad2 = bloques - mitad1
-            for d1, d2 in self.PAREJAS_DIAS:
-                estrategias.append([(d1, mitad1), (d2, mitad2)])
-                if mitad1 != mitad2:
-                    estrategias.append([(d1, mitad2), (d2, mitad1)])
+        mitad1 = math.ceil(bloques / 2)
+        mitad2 = bloques - mitad1
 
-            if bloques == 6:
-                # 3 sesiones de 1 hora
-                for triada in self.TRIADAS_DIAS:
-                    estrategias.append([(triada[0], 2), (triada[1], 2), (triada[2], 2)])
+        # 1. Prioridad principal: L-X y M-J
+        for d1, d2 in self.PAREJAS_DIAS:
+            estrategias.append([(d1, mitad1), (d2, mitad2)])
+            if mitad1 != mitad2:
+                estrategias.append([(d1, mitad2), (d2, mitad1)])
 
-            if bloques == 8:
-                # 4 sesiones o 2+2+2+2
-                for triada in self.TRIADAS_DIAS:
-                    estrategias.append([(triada[0], 3), (triada[1], 3), (triada[2], 2)])
-        else:
-            mitad1 = math.ceil(bloques / 2)
-            mitad2 = bloques - mitad1
-            if mitad1 > 0 and mitad2 > 0:
-                for d1, d2 in self.PAREJAS_DIAS:
-                    estrategias.append([(d1, mitad1), (d2, mitad2)])
-            for d in self.DIAS_SEMANA:
-                estrategias.append([(d, bloques)])
+        # 2. Tríadas simétricas si son 6 u 8 bloques
+        if bloques == 6:
+            for triada in self.TRIADAS_DIAS:
+                estrategias.append([(triada[0], 2), (triada[1], 2), (triada[2], 2)])
+        elif bloques == 8:
+            for triada in self.TRIADAS_DIAS:
+                estrategias.append([(triada[0], 3), (triada[1], 3), (triada[2], 2)])
+
+        # 3. Asignar todas las horas en una sola sesión en Viernes o Sábado (ej. 8 a 12 o bloque completo)
+        if bloques <= 10:
+            estrategias.append([("Viernes", bloques)])
+            estrategias.append([("Sábado", bloques)])
+
+        # 4. Parejas secundarias
+        for d1, d2 in self.PAREJAS_SECUNDARIAS:
+            estrategias.append([(d1, mitad1), (d2, mitad2)])
+            if mitad1 != mitad2:
+                estrategias.append([(d1, mitad2), (d2, mitad1)])
+
+        # 5. Día individual entre semana si fuera indispensable
+        for d in ["Lunes", "Martes", "Miércoles", "Jueves"]:
+            estrategias.append([(d, bloques)])
 
         return estrategias
 
@@ -252,19 +264,19 @@ class GeneradorPreasignacion:
 
             if i + 1 < len(grupos_regulares):
                 g_tarde = grupos_regulares[i + 1]
-                # Franja vespertina: slot 12 (13:00) a 26 (20:00)
-                asignacion_aulas[g_tarde['grupo_id']] = (salon_asignado, 12, 26)
+                # Franja vespertina: slot 12 (13:00) a 20 (17:00)
+                asignacion_aulas[g_tarde['grupo_id']] = (salon_asignado, 12, 20)
                 i += 2
             else:
                 # Quedó un grupo regular solo en este salón; si hay reducidos, empaquetar hasta 2 aquí
                 if len(grupos_reducidos) >= 2:
                     g_red1 = grupos_reducidos.pop(0)
                     g_red2 = grupos_reducidos.pop(0)
-                    asignacion_aulas[g_red1['grupo_id']] = (salon_asignado, 12, 18)
-                    asignacion_aulas[g_red2['grupo_id']] = (salon_asignado, 18, 26)
+                    asignacion_aulas[g_red1['grupo_id']] = (salon_asignado, 12, 16)
+                    asignacion_aulas[g_red2['grupo_id']] = (salon_asignado, 16, 20)
                 elif len(grupos_reducidos) == 1:
                     g_red = grupos_reducidos.pop(0)
-                    asignacion_aulas[g_red['grupo_id']] = (salon_asignado, 12, 22)
+                    asignacion_aulas[g_red['grupo_id']] = (salon_asignado, 12, 20)
                 i += 1
 
             idx_salon += 1
@@ -280,14 +292,14 @@ class GeneradorPreasignacion:
                 lote_red.append(grupos_reducidos.pop(0))
 
             if len(lote_red) == 3:
-                # 3 grupos en el salón: 07:00-11:00, 11:00-15:00, 15:00-19:30
-                asignacion_aulas[lote_red[0]['grupo_id']] = (salon_asignado, 0, 8)
-                asignacion_aulas[lote_red[1]['grupo_id']] = (salon_asignado, 8, 16)
-                asignacion_aulas[lote_red[2]['grupo_id']] = (salon_asignado, 16, 26)
+                # 3 grupos en el salón: 07:00-10:20 (0 a 7), 10:20-13:40 (7 a 14), 13:40-17:00 (14 a 20)
+                asignacion_aulas[lote_red[0]['grupo_id']] = (salon_asignado, 0, 7)
+                asignacion_aulas[lote_red[1]['grupo_id']] = (salon_asignado, 7, 14)
+                asignacion_aulas[lote_red[2]['grupo_id']] = (salon_asignado, 14, 20)
             elif len(lote_red) == 2:
-                # 2 grupos en el salón: 07:00-13:00 y 13:00-19:00
-                asignacion_aulas[lote_red[0]['grupo_id']] = (salon_asignado, 0, 12)
-                asignacion_aulas[lote_red[1]['grupo_id']] = (salon_asignado, 12, 26)
+                # 2 grupos en el salón: 07:00-12:00 (0 a 10) y 12:00-17:00 (10 a 20)
+                asignacion_aulas[lote_red[0]['grupo_id']] = (salon_asignado, 0, 10)
+                asignacion_aulas[lote_red[1]['grupo_id']] = (salon_asignado, 10, 20)
             elif len(lote_red) == 1:
                 asignacion_aulas[lote_red[0]['grupo_id']] = (salon_asignado, 0, 16)
 
