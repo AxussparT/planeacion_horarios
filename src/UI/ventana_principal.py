@@ -51,6 +51,11 @@ class VentanaPrincipal:
         estilo.theme_use('clam')
         estilo.configure('blue.TFrame', background='#0A0F1E')
         estilo.configure('Custom.TCheckbutton', font=self._fuente_sub, background='#0A0F1E', foreground='#ffffff')
+        estilo.map('Custom.TCheckbutton',
+            background=[('active', '#ffffff'), ('focus', '#ffffff'), ('pressed', '#ffffff')],
+            foreground=[('active', '#000000'), ('focus', '#000000'), ('pressed', '#000000')],
+            indicatorcolor=[('selected', '#2f4a23'), ('active', '#2f4a23')]
+        )
         estilo.configure('Danger.TButton', font=self._fuente_btn, background='#6D583A', foreground='#000000', padding=10)
         estilo.configure('Treeview.Heading', font=self._fuente_tree_head, background='#2f4a23', foreground='#ffffff')
         estilo.configure('Treeview', font=self._fuente_tree, rowheight=25)
@@ -200,27 +205,8 @@ class VentanaPrincipal:
         self.frame_contenedor_mat_grp = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
         self.frame_contenedor_mat_grp.pack(fill='x', padx=25, pady=(0, 5))
 
-        self.canvas_mat_grp = tk.Canvas(self.frame_contenedor_mat_grp, height=130, highlightthickness=1, highlightbackground='#2A3656', background='#0D152A')
-        self.sb_mat_grp = ttk.Scrollbar(self.frame_contenedor_mat_grp, orient='vertical', command=self.canvas_mat_grp.yview)
-        self.frame_mat_grp_checks = ttk.Frame(self.canvas_mat_grp, style='blue.TFrame')
-
-        self.frame_mat_grp_checks.bind(
-            '<Configure>', lambda e: self.canvas_mat_grp.configure(scrollregion=self.canvas_mat_grp.bbox('all'))
-        )
-        self._canvas_mat_grp_window = self.canvas_mat_grp.create_window((0, 0), window=self.frame_mat_grp_checks, anchor='nw')
-
-        def _ajustar_ancho_mat_grp(event):
-            self.canvas_mat_grp.itemconfig(self._canvas_mat_grp_window, width=event.width)
-        self.canvas_mat_grp.bind('<Configure>', _ajustar_ancho_mat_grp)
-
-        def _scroll_mat_grp(event):
-            self.canvas_mat_grp.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        self.canvas_mat_grp.bind("<MouseWheel>", _scroll_mat_grp)
-        self.frame_mat_grp_checks.bind("<MouseWheel>", _scroll_mat_grp)
-
-        self.canvas_mat_grp.configure(yscrollcommand=self.sb_mat_grp.set)
-        self.canvas_mat_grp.pack(side='left', fill='both', expand=True)
-        self.sb_mat_grp.pack(side='right', fill='y')
+        self.frame_mat_grp_checks = tk.Frame(self.frame_contenedor_mat_grp, background='#0D152A', highlightthickness=1, highlightbackground='#2A3656')
+        self.frame_mat_grp_checks.pack(fill='x', expand=True)
 
         self.materias_grupo_vars = {}
         self._lbl_hint_mat_grp = ttk.Label(self.frame_mat_grp_checks, text="Ingresa un semestre para seleccionar materias", style='fondo.TLabel', foreground='#7E8B9B', font=self._fuente_sub)
@@ -1308,7 +1294,6 @@ class VentanaPrincipal:
                 style='Custom.TCheckbutton'
             )
             cb.pack(fill='x', padx=8, pady=3, anchor='w')
-            cb.bind("<MouseWheel>", lambda e: self.canvas_mat_grp.yview_scroll(int(-1 * (e.delta / 120)), "units"))
 
     def cargar_grupo_seleccionado(self, event):
         item = self.tabla_grupos.focus()
