@@ -102,6 +102,11 @@ class VentanaGestion:
         estilo.configure('TNotebook', background='#0A0F1E', borderwidth=0)
         estilo.configure('TNotebook.Tab', background='#1a1f3e', foreground='#ffffff', padding=[10, 2])
         estilo.map('TNotebook.Tab', background=[('selected', '#0A0F1E')], foreground=[('selected', '#6D583A')])
+        estilo.configure('Custom.TCheckbutton', font=self._fuente_label, background='#0A0F1E', foreground='#ffffff')
+        estilo.map('Custom.TCheckbutton',
+            background=[('active', '#ffffff'), ('focus', '#ffffff'), ('pressed', '#ffffff')],
+            foreground=[('active', '#000000'), ('focus', '#000000'), ('pressed', '#000000')]
+        )
 
 
         self.profesores_map = {}
@@ -316,21 +321,23 @@ class VentanaGestion:
         f_tabla_mat_grp = ttk.Frame(f_grupo_sel, style='blue.TFrame')
         f_tabla_mat_grp.pack(fill='both', expand=True, padx=6, pady=4)
 
-        cols_mg = ('Materia', 'Aula', 'Días', 'Horario', 'Profesor', 'Estado')
+        cols_mg = ('Materia', 'Aula', 'Modalidad', 'Días', 'Horario', 'Profesor', 'Estado')
         self.tabla_materias_grupo = ttk.Treeview(f_tabla_mat_grp, columns=cols_mg, show='headings', height=7)
         self.tabla_materias_grupo.heading('Materia', text='Materia')
         self.tabla_materias_grupo.heading('Aula', text='Aula')
+        self.tabla_materias_grupo.heading('Modalidad', text='Modalidad')
         self.tabla_materias_grupo.heading('Días', text='Días')
         self.tabla_materias_grupo.heading('Horario', text='Horario')
         self.tabla_materias_grupo.heading('Profesor', text='Profesor Asignado')
         self.tabla_materias_grupo.heading('Estado', text='Estado')
 
-        self.tabla_materias_grupo.column('Materia', width=140, anchor='w')
+        self.tabla_materias_grupo.column('Materia', width=130, anchor='w')
         self.tabla_materias_grupo.column('Aula', width=50, anchor='center')
-        self.tabla_materias_grupo.column('Días', width=100, anchor='center')
-        self.tabla_materias_grupo.column('Horario', width=90, anchor='center')
-        self.tabla_materias_grupo.column('Profesor', width=140, anchor='w')
-        self.tabla_materias_grupo.column('Estado', width=70, anchor='center')
+        self.tabla_materias_grupo.column('Modalidad', width=80, anchor='center')
+        self.tabla_materias_grupo.column('Días', width=90, anchor='center')
+        self.tabla_materias_grupo.column('Horario', width=85, anchor='center')
+        self.tabla_materias_grupo.column('Profesor', width=130, anchor='w')
+        self.tabla_materias_grupo.column('Estado', width=65, anchor='center')
 
         sb_mg_v = ttk.Scrollbar(f_tabla_mat_grp, orient='vertical', command=self.tabla_materias_grupo.yview)
         self.tabla_materias_grupo.configure(yscroll=sb_mg_v.set)
@@ -342,11 +349,12 @@ class VentanaGestion:
         f_docente_vinculo = ttk.LabelFrame(self.frame_izq, text="Vincular Profesor a Materia Seleccionada", style='blue.TFrame')
         f_docente_vinculo.pack(fill='x', padx=8, pady=6)
 
+        # Fila 1: Profesor Entry + Botones de Vinculación
         f_doc_sel = ttk.Frame(f_docente_vinculo, style='blue.TFrame')
         f_doc_sel.pack(fill='x', padx=6, pady=4)
 
         ttk.Label(f_doc_sel, text="Profesor:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 4))
-        self.entry_prof_vinculo = ttk.Entry(f_doc_sel, font=self._fuente_label, state='readonly', width=30)
+        self.entry_prof_vinculo = ttk.Entry(f_doc_sel, font=self._fuente_label, state='readonly', width=28)
         self.entry_prof_vinculo.pack(side='left', fill='x', expand=True, padx=(0, 6))
 
         self._btn_vincular_profesor = ttk.Button(
@@ -365,7 +373,93 @@ class VentanaGestion:
         )
         self._btn_desvincular_profesor.pack(side='left', padx=2)
 
-        self._lbl_estado_vinculo = ttk.Label(f_docente_vinculo, text="Selecciona una materia arriba y un profesor a la derecha.", background='#0A0F1E', foreground='#7E8B9B', font=self._fuente_label)
+        # Fila 2: Modalidad y Toggle de Horario Manual
+        f_modo_linea = ttk.Frame(f_docente_vinculo, style='blue.TFrame')
+        f_modo_linea.pack(fill='x', padx=6, pady=3)
+
+        ttk.Label(f_modo_linea, text="Modalidad:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 4))
+        self.combo_modalidad_vinculo = ttk.Combobox(
+            f_modo_linea,
+            values=["Presencial", "Mediación Tecnológica"],
+            state="readonly",
+            width=20,
+            font=self._fuente_label
+        )
+        self.combo_modalidad_vinculo.set("Presencial")
+        self.combo_modalidad_vinculo.pack(side='left', padx=(0, 10))
+
+        self._horario_manual_visible = False
+        self._btn_toggle_horario_manual = ttk.Button(
+            f_modo_linea,
+            text="⚙ Horario y Días Manual ▼",
+            command=self._toggle_horario_manual
+        )
+        self._btn_toggle_horario_manual.pack(side='left', padx=4)
+
+        # Fila 3: Subpanel Desplegable de Horario y Días Manual (inicialmente no empaquetado)
+        self._frame_horario_manual = ttk.LabelFrame(f_docente_vinculo, text="Definir Horario y Días Manualmente", style='blue.TFrame')
+
+        f_hm_horas = ttk.Frame(self._frame_horario_manual, style='blue.TFrame')
+        f_hm_horas.pack(fill='x', padx=6, pady=3)
+
+        ttk.Label(f_hm_horas, text="Hora Inicio:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
+        self.combo_manual_hora_i = ttk.Combobox(
+            f_hm_horas,
+            values=[f"{h:02d}:00" for h in range(7, 18)],
+            state="readonly",
+            width=6,
+            font=self._fuente_label
+        )
+        self.combo_manual_hora_i.set("07:00")
+        self.combo_manual_hora_i.pack(side='left', padx=(0, 8))
+
+        ttk.Label(f_hm_horas, text="Hora Fin:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
+        self.combo_manual_hora_f = ttk.Combobox(
+            f_hm_horas,
+            values=[f"{h:02d}:00" for h in range(8, 19)],
+            state="readonly",
+            width=6,
+            font=self._fuente_label
+        )
+        self.combo_manual_hora_f.set("09:00")
+        self.combo_manual_hora_f.pack(side='left', padx=(0, 8))
+
+        ttk.Label(f_hm_horas, text="Aula:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 2))
+        self.combo_manual_aula = ttk.Combobox(
+            f_hm_horas,
+            values=[],
+            state="readonly",
+            width=8,
+            font=self._fuente_label
+        )
+        self.combo_manual_aula.pack(side='left', padx=(0, 8))
+
+        self._btn_guardar_manual = ttk.Button(
+            f_hm_horas,
+            text="💾 Aplicar Horario Manual",
+            command=self._aplicar_horario_manual_seleccionada,
+            state='disabled'
+        )
+        self._btn_guardar_manual.pack(side='left', padx=4)
+
+        f_hm_dias = ttk.Frame(self._frame_horario_manual, style='blue.TFrame')
+        f_hm_dias.pack(fill='x', padx=6, pady=3)
+
+        ttk.Label(f_hm_dias, text="Días:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 6))
+        self._vars_dias_manual = {}
+        for d_nom in ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]:
+            var_d = tk.BooleanVar(value=False)
+            self._vars_dias_manual[d_nom] = var_d
+            cb = ttk.Checkbutton(f_hm_dias, text=d_nom, variable=var_d, style='Custom.TCheckbutton')
+            cb.pack(side='left', padx=3)
+
+        self._lbl_estado_vinculo = ttk.Label(
+            f_docente_vinculo,
+            text="Selecciona una materia arriba y un profesor a la derecha.",
+            background='#0A0F1E',
+            foreground='#7E8B9B',
+            font=self._fuente_label
+        )
         self._lbl_estado_vinculo.pack(fill='x', padx=8, pady=(2, 6))
 
         # --- Profesor info y Periodos legacy (colapsable / secundario) ---
@@ -650,7 +744,8 @@ class VentanaGestion:
                     a.profesor_id,
                     IFNULL(p.nombre, 'Sin profesor') AS prof_nombre,
                     IFNULL(a.estado, 'no asignado') AS estado,
-                    GROUP_CONCAT(DISTINCT h.salon_id) AS salones
+                    GROUP_CONCAT(DISTINCT h.salon_id) AS salones,
+                    IFNULL(a.modalidad, 'Presencial') AS modalidad
                 FROM asignaciones a
                 LEFT JOIN materias m ON a.materia_id = m.materia_id
                 LEFT JOIN profesores p ON a.profesor_id = p.profesor_id
@@ -664,7 +759,7 @@ class VentanaGestion:
         self._materias_grupo_cache = {}
         total_asignadas = 0
         for f in filas:
-            asig_id, m_id, m_nom, dias, hi, hf, prof_id, prof_nom, estado, salones = f
+            asig_id, m_id, m_nom, dias, hi, hf, prof_id, prof_nom, estado, salones, modalidad = f
             hi_str = self._hora_db_a_str(hi) if hi else ""
             hf_str = self._hora_db_a_str(hf) if hf else ""
             horario_str = f"{hi_str} - {hf_str}" if hi_str and hf_str else "Sin horario"
@@ -683,13 +778,14 @@ class VentanaGestion:
                 "profesor_id": prof_id,
                 "profesor_nombre": p_display,
                 "estado": estado,
-                "salon_id": aula_str
+                "salon_id": aula_str,
+                "modalidad": modalidad
             }
             self._materias_grupo_cache[str(asig_id)] = info_asig
 
             self.tabla_materias_grupo.insert(
                 '', 'end', iid=str(asig_id),
-                values=(f"{m_id} - {m_nom}", aula_str, dias, horario_str, p_display, estado.upper())
+                values=(f"{m_id} - {m_nom}", aula_str, modalidad, dias, horario_str, p_display, estado.upper())
             )
 
         self._lbl_info_grupo_gestion.config(
@@ -697,12 +793,52 @@ class VentanaGestion:
         )
         self._actualizar_estado_boton_vinculo()
 
+    def _toggle_horario_manual(self):
+        if getattr(self, '_horario_manual_visible', False):
+            self._frame_horario_manual.pack_forget()
+            self._horario_manual_visible = False
+            self._btn_toggle_horario_manual.config(text="⚙ Horario y Días Manual ▼")
+        else:
+            self._frame_horario_manual.pack(fill='x', padx=6, pady=4, before=self._lbl_estado_vinculo)
+            self._horario_manual_visible = True
+            self._btn_toggle_horario_manual.config(text="⚙ Ocultar Horario Manual ▲")
+
+    def _cargar_salones_para_manual(self):
+        try:
+            with obtener_cursor() as ctx:
+                if ctx:
+                    cur, conn = ctx
+                    cur.execute("SELECT DISTINCT salon_id FROM salones WHERE salon_id NOT LIKE 'MEDIACION%' ORDER BY salon_id")
+                    salones = [r[0] for r in cur.fetchall()]
+                    if hasattr(self, 'combo_manual_aula'):
+                        self.combo_manual_aula['values'] = salones
+                        if salones and not self.combo_manual_aula.get():
+                            self.combo_manual_aula.set(salones[0])
+        except Exception as e:
+            print(f"Error cargando salones manuales: {e}")
+
     def _on_select_materia_grupo_gestion(self, event=None):
         sel = self.tabla_materias_grupo.selection()
         if not sel:
             self._materia_grupo_seleccionada_id = None
         else:
             self._materia_grupo_seleccionada_id = sel[0]
+            asig_info = self._materias_grupo_cache.get(str(sel[0]))
+            if asig_info:
+                if hasattr(self, 'combo_modalidad_vinculo'):
+                    self.combo_modalidad_vinculo.set(asig_info.get('modalidad') or 'Presencial')
+                if hasattr(self, 'combo_manual_hora_i') and asig_info.get('hora_inicio'):
+                    self.combo_manual_hora_i.set(asig_info['hora_inicio'])
+                if hasattr(self, 'combo_manual_hora_f') and asig_info.get('hora_fin'):
+                    self.combo_manual_hora_f.set(asig_info['hora_fin'])
+                if hasattr(self, 'combo_manual_aula') and asig_info.get('salon_id'):
+                    aula = asig_info['salon_id'].split(',')[0].strip()
+                    if aula and aula != "Sin aula":
+                        self.combo_manual_aula.set(aula)
+                if hasattr(self, '_vars_dias_manual'):
+                    dias_act = [d.strip() for d in (asig_info.get('dias') or '').split(',') if d.strip()]
+                    for d_nom, var in self._vars_dias_manual.items():
+                        var.set(d_nom in dias_act)
         self._actualizar_estado_boton_vinculo()
 
     def _actualizar_estado_boton_vinculo(self):
@@ -710,6 +846,9 @@ class VentanaGestion:
         prof_id = self._profesor_id_seleccionado
 
         asig_info = self._materias_grupo_cache.get(str(asig_id)) if asig_id else None
+
+        if hasattr(self, '_btn_guardar_manual'):
+            self._btn_guardar_manual.config(state='normal' if asig_info else 'disabled')
 
         if asig_info:
             p_actual = asig_info.get("profesor_nombre", "Sin profesor")
@@ -721,7 +860,7 @@ class VentanaGestion:
                 prof_info = self.profesores_map.get(str(prof_id), {})
                 p_nombre_sel = prof_info.get("nombre", prof_id)
                 self._lbl_estado_vinculo.config(
-                    text=f"Materia: {asig_info['materia_nombre']} | Horario: {asig_info['hora_inicio']}-{asig_info['hora_fin']} [{asig_info['dias']}] (Aula: {asig_info['salon_id']})\n"
+                    text=f"Materia: {asig_info['materia_nombre']} | Horario: {asig_info['hora_inicio']}-{asig_info['hora_fin']} [{asig_info['dias']}] (Aula: {asig_info['salon_id']}) [{asig_info.get('modalidad', 'Presencial')}]\n"
                          f"Docente a vincular: {p_nombre_sel}",
                     foreground='#98FB98'
                 )
@@ -729,7 +868,7 @@ class VentanaGestion:
                     self._btn_vincular_profesor.config(state='normal')
             else:
                 self._lbl_estado_vinculo.config(
-                    text=f"Materia seleccionada: {asig_info['materia_nombre']} ({p_actual}). Selecciona un profesor de la tabla derecha.",
+                    text=f"Materia seleccionada: {asig_info['materia_nombre']} ({p_actual}) [{asig_info.get('modalidad', 'Presencial')}]. Selecciona un profesor de la tabla derecha.",
                     foreground='#FFD700'
                 )
                 if hasattr(self, '_btn_vincular_profesor'):
@@ -743,6 +882,216 @@ class VentanaGestion:
                 text="Selecciona una materia preasignada arriba y un profesor a la derecha para vincular.",
                 foreground='#7E8B9B'
             )
+
+    def _validar_disponibilidad_profesor(self, prof_id, dias_lista, hora_i, hora_f):
+        if not prof_id or prof_id == 'SIN_ASIGNAR':
+            return False, ""
+        disp_choque = False
+        disp_detalle = ""
+        with obtener_cursor() as ctx:
+            if ctx:
+                cur, conn = ctx
+                cur.execute(
+                    "SELECT dia, hora_inicio, hora_fin FROM profesor_disponibilidad WHERE profesor_id = %s",
+                    (prof_id,)
+                )
+                disp_rows = cur.fetchall()
+                if disp_rows:
+                    ini_min = self._minutos_hora_previa(hora_i)
+                    fin_min = self._minutos_hora_previa(hora_f)
+                    dias_indices = [self._dia_a_indice_previa(d) for d in dias_lista if self._dia_a_indice_previa(d) is not None]
+
+                    cubiertos = set()
+                    for d_idx in dias_indices:
+                        for row_dia, row_hi, row_hf in disp_rows:
+                            r_d_idx = self._dia_a_indice_previa(row_dia)
+                            r_ini = self._minutos_hora_previa(row_hi)
+                            r_fin = self._minutos_hora_previa(row_hf)
+                            if r_d_idx == d_idx and r_ini is not None and r_fin is not None:
+                                if r_ini <= ini_min and fin_min <= r_fin:
+                                    cubiertos.add(d_idx)
+                                    break
+                    if len(cubiertos) < len(dias_indices):
+                        disp_choque = True
+                        disp_detalle = f"El horario ({hora_i} - {hora_f} en {', '.join(dias_lista)}) excede o no coincide con los periodos de disponibilidad registrados del profesor."
+        return disp_choque, disp_detalle
+
+    def _detectar_choques_aula(self, salon_id, asignacion_id, dias, hora_i, hora_f):
+        if not salon_id or salon_id in ("Sin aula", "") or str(salon_id).upper().startswith("MEDIACION"):
+            return []
+        inicio = self._minutos_hora_previa(hora_i)
+        fin = self._minutos_hora_previa(hora_f)
+        dias_propuestos = {
+            indice for indice in (self._dia_a_indice_previa(dia) for dia in dias)
+            if indice is not None
+        }
+        if inicio is None or fin is None or fin <= inicio or not dias_propuestos:
+            return []
+
+        choques = []
+        with obtener_cursor_dict() as ctx:
+            if ctx is None:
+                return []
+            cur, conn = ctx
+            cur.execute("""
+                SELECT h.dia, h.hora_inicio, h.hora_fin, a.grupo_id, IFNULL(m.nombre, a.materia_id) AS materia
+                FROM horarios h
+                JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
+                LEFT JOIN materias m ON a.materia_id = m.materia_id
+                WHERE LOWER(h.salon_id) = LOWER(%s)
+                  AND h.asignacion_id <> %s
+                  AND (a.estado IS NULL OR a.estado != 'cancelada')
+            """, (salon_id, asignacion_id or -1))
+            filas = cur.fetchall()
+            for f in filas:
+                indice_dia = self._dia_a_indice_previa(f['dia'])
+                if indice_dia in dias_propuestos:
+                    ini_ex = self._minutos_hora_previa(f['hora_inicio'])
+                    fin_ex = self._minutos_hora_previa(f['hora_fin'])
+                    if ini_ex is not None and fin_ex is not None:
+                        if inicio < fin_ex and fin > ini_ex:
+                            choques.append({
+                                "dia": self.NOMBRES_DIAS[indice_dia] if indice_dia < len(self.NOMBRES_DIAS) else str(f['dia']),
+                                "inicio": f['hora_inicio'],
+                                "fin": f['hora_fin'],
+                                "grupo_id": f['grupo_id'],
+                                "materia": f['materia']
+                            })
+        return choques
+
+    def _aplicar_horario_manual_seleccionada(self):
+        asig_id = self._materia_grupo_seleccionada_id
+        if not asig_id:
+            messagebox.showwarning("Aviso", "Selecciona primero una materia de la tabla de materias preasignadas.")
+            return
+
+        asig_info = self._materias_grupo_cache.get(str(asig_id))
+        if not asig_info:
+            messagebox.showerror("Error", "No se encontró la información de la materia seleccionada.")
+            return
+
+        hora_i = self.combo_manual_hora_i.get().strip()
+        hora_f = self.combo_manual_hora_f.get().strip()
+        aula_sel = self.combo_manual_aula.get().strip()
+        modalidad_sel = self.combo_modalidad_vinculo.get().strip() or "Presencial"
+        dias_sel = [d for d, var in self._vars_dias_manual.items() if var.get()]
+
+        # 1. Validar horas
+        ini_min = self._minutos_hora_previa(hora_i)
+        fin_min = self._minutos_hora_previa(hora_f)
+        if ini_min is None or fin_min is None or fin_min <= ini_min:
+            messagebox.showerror("Horario Inválido", "La hora de fin debe ser posterior a la hora de inicio.")
+            return
+
+        # 2. Validar días
+        if not dias_sel:
+            messagebox.showwarning("Días Requeridos", "Debes seleccionar al menos un día para el horario manual.")
+            return
+
+        # 3. Límite vespertino (17:00 hrs = 1020 min)
+        if fin_min > 17 * 60:
+            if not messagebox.askyesno(
+                "Horario Vespertino",
+                f"La hora de fin ({hora_f}) excede las 17:00 hrs.\n"
+                f"La normativa institucional establece las 17:00 hrs como límite para las asignaciones.\n\n"
+                f"¿Desea continuar de todos modos?"
+            ):
+                return
+
+        # 4. Validar horas semanales de la materia
+        duracion_sesion_horas = (fin_min - ini_min) / 60.0
+        total_horas_manual = duracion_sesion_horas * len(dias_sel)
+        horas_requeridas = self._get_horas_materia(asig_info['materia_id'])
+        if horas_requeridas > 0 and abs(total_horas_manual - horas_requeridas) > 0.01:
+            if not messagebox.askyesno(
+                "Discrepancia de Horas Semanales",
+                f"La materia '{asig_info['materia_nombre']}' requiere {int(horas_requeridas)} hrs/semana según plan de estudios.\n\n"
+                f"La configuración manual suma {total_horas_manual:.1f} hrs/semana ({len(dias_sel)} días x {duracion_sesion_horas:.1f} hrs/día).\n\n"
+                f"¿Desea aplicar este horario de todos modos?"
+            ):
+                return
+
+        # 5. Choque de Grupo
+        grupo_id = self._sv_grupo_gestion.get().strip()
+        choques_grupo = self._detectar_choques_grupo(grupo_id, asig_info['materia_id'], dias_sel, hora_i, hora_f, excluir_asignacion_id=asig_id)
+        if choques_grupo:
+            detalles = "\n".join([f"• {c['dia']} {c['inicio']}-{c['fin']}: {c['materia']}" for c in choques_grupo])
+            messagebox.showerror(
+                "Conflicto de Horario del Grupo",
+                f"El grupo '{grupo_id}' ya tiene materias asignadas en ese horario:\n\n{detalles}\n\nNo es posible sobreponer materias para el mismo grupo."
+            )
+            return
+
+        # 6. Choque de Aula (si es presencial)
+        if modalidad_sel == "Mediación Tecnológica":
+            if not aula_sel or aula_sel == "Sin aula":
+                aula_sel = "MEDIACION_TECNOLOGICA"
+        else:
+            if not aula_sel or aula_sel == "Sin aula":
+                messagebox.showwarning("Aula requerida", "Para la modalidad presencial debes seleccionar un aula válida.")
+                return
+            choques_aula = self._detectar_choques_aula(aula_sel, asig_id, dias_sel, hora_i, hora_f)
+            if choques_aula:
+                detalles = "\n".join([f"• {c['dia']} {c['inicio']}-{c['fin']}: Grupo {c['grupo_id']} ({c['materia']})" for c in choques_aula])
+                messagebox.showerror(
+                    "Conflicto de Aula",
+                    f"El aula '{aula_sel}' ya está ocupada en ese horario:\n\n{detalles}\n\nSeleccione otra aula u otro horario."
+                )
+                return
+
+        # 7. Choque de Profesor (si ya tiene profesor asignado)
+        prof_id = asig_info.get('profesor_id')
+        if prof_id and prof_id != 'SIN_ASIGNAR':
+            choques_profesor = []
+            try:
+                choques_profesor = self._detectar_choques_profesor(
+                    prof_id, asig_info['materia_id'], grupo_id, modalidad_sel, dias_sel, hora_i, hora_f, excluir_asignacion_id=asig_id
+                )
+            except Exception as e:
+                print(f"Error comprobando choques de profesor: {e}")
+            disp_choque, disp_detalle = self._validar_disponibilidad_profesor(prof_id, dias_sel, hora_i, hora_f)
+
+            if choques_profesor or disp_choque:
+                self._mostrar_modal_resolucion_conflicto(
+                    asig_info=asig_info,
+                    prof_id=prof_id,
+                    prof_nombre=asig_info.get('profesor_nombre', prof_id),
+                    choques=choques_profesor,
+                    motivo_disp=disp_detalle
+                )
+                return
+
+        # 8. Persistir en la base de datos
+        dias_str = ", ".join(dias_sel)
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return
+            cur, conn = ctx
+            try:
+                cur.execute("""
+                    UPDATE asignaciones
+                    SET hora_inicio = %s, hora_fin = %s, dias = %s, modalidad = %s
+                    WHERE asignacion_id = %s
+                """, (hora_i, hora_f, dias_str, modalidad_sel, asig_id))
+
+                cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (asig_id,))
+                for d in dias_sel:
+                    cur.execute("""
+                        INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (asig_id, aula_sel, d, f"{hora_i}:00" if len(hora_i) == 5 else hora_i, f"{hora_f}:00" if len(hora_f) == 5 else hora_f))
+
+                conn.commit()
+            except sqlite3.Error as err:
+                conn.rollback()
+                messagebox.showerror("Error BD", f"Error actualizando horario manual: {err}")
+                return
+
+        self._cargar_materias_grupo_gestion()
+        self.actualizar_vista_previa()
+        self._cargar_previa_horario_grupo()
+        self._cargar_tensor_diferido(forzar=True)
+        messagebox.showinfo("Éxito", f"Horario manual asignado correctamente a '{asig_info['materia_nombre']}':\n{dias_str} de {hora_i} a {hora_f} en {aula_sel} ({modalidad_sel}).")
 
     def _desvincular_docente_materia(self):
         asig_id = self._materia_grupo_seleccionada_id
@@ -799,55 +1148,77 @@ class VentanaGestion:
         materia_id = asig_info['materia_id']
         materia_nombre = asig_info['materia_nombre']
         grupo_id = self._sv_grupo_gestion.get().strip()
-        hora_i = asig_info['hora_inicio']
-        hora_f = asig_info['hora_fin']
-        dias_str = asig_info['dias']
-        dias_lista = [d.strip() for d in dias_str.split(',') if d.strip()]
+
+        modalidad = self.combo_modalidad_vinculo.get().strip() or "Presencial"
+
+        if getattr(self, '_horario_manual_visible', False):
+            # Usar valores del panel manual
+            hora_i = self.combo_manual_hora_i.get().strip()
+            hora_f = self.combo_manual_hora_f.get().strip()
+            aula_sel = self.combo_manual_aula.get().strip()
+            dias_lista = [d for d, var in self._vars_dias_manual.items() if var.get()]
+            dias_str = ", ".join(dias_lista)
+
+            # Validar horas
+            ini_min = self._minutos_hora_previa(hora_i)
+            fin_min = self._minutos_hora_previa(hora_f)
+            if ini_min is None or fin_min is None or fin_min <= ini_min:
+                messagebox.showerror("Horario Inválido", "La hora de fin debe ser posterior a la hora de inicio.")
+                return
+            if not dias_lista:
+                messagebox.showwarning("Días Requeridos", "Debes seleccionar al menos un día para el horario manual.")
+                return
+            if fin_min > 17 * 60:
+                if not messagebox.askyesno("Horario Vespertino", f"La hora de fin ({hora_f}) excede las 17:00 hrs.\n¿Desea continuar de todos modos?"):
+                    return
+            dur_h = (fin_min - ini_min) / 60.0
+            tot_h = dur_h * len(dias_lista)
+            h_req = self._get_horas_materia(materia_id)
+            if h_req > 0 and abs(tot_h - h_req) > 0.01:
+                if not messagebox.askyesno("Discrepancia de Horas", f"La materia requiere {int(h_req)} hrs/sem y la selección manual suma {tot_h:.1f} hrs/sem.\n¿Desea continuar de todos modos?"):
+                    return
+            # Choque grupo
+            choques_grupo = self._detectar_choques_grupo(grupo_id, materia_id, dias_lista, hora_i, hora_f, excluir_asignacion_id=asig_id)
+            if choques_grupo:
+                det = "\n".join([f"• {c['dia']} {c['inicio']}-{c['fin']}: {c['materia']}" for c in choques_grupo])
+                messagebox.showerror("Conflicto de Grupo", f"El grupo '{grupo_id}' ya tiene clases en ese horario:\n\n{det}")
+                return
+            # Choque aula
+            if modalidad == "Mediación Tecnológica":
+                if not aula_sel or aula_sel == "Sin aula":
+                    aula_sel = "MEDIACION_TECNOLOGICA"
+            else:
+                if not aula_sel or aula_sel == "Sin aula":
+                    messagebox.showwarning("Aula requerida", "Para la modalidad presencial debes seleccionar un aula válida.")
+                    return
+                choques_aula = self._detectar_choques_aula(aula_sel, asig_id, dias_lista, hora_i, hora_f)
+                if choques_aula:
+                    det = "\n".join([f"• {c['dia']} {c['inicio']}-{c['fin']}: Grupo {c['grupo_id']} ({c['materia']})" for c in choques_aula])
+                    messagebox.showerror("Conflicto de Aula", f"El aula '{aula_sel}' ya está ocupada en ese horario:\n\n{det}")
+                    return
+        else:
+            hora_i = asig_info['hora_inicio']
+            hora_f = asig_info['hora_fin']
+            dias_str = asig_info['dias']
+            dias_lista = [d.strip() for d in dias_str.split(',') if d.strip()]
+            aula_sel = asig_info.get('salon_id', 'Sin aula')
 
         # 1. Comprobar si el profesor ya tiene esa misma asignación
-        if asig_info.get('profesor_id') == prof_id:
-            messagebox.showinfo("Información", f"El profesor '{prof_nombre}' ya está asignado a esta materia.")
+        if asig_info.get('profesor_id') == prof_id and asig_info.get('modalidad') == modalidad and not getattr(self, '_horario_manual_visible', False):
+            messagebox.showinfo("Información", f"El profesor '{prof_nombre}' ya está asignado a esta materia con la misma configuración.")
             return
 
         # 2. Comprobar choques de horario del profesor
         choques_profesor = []
         try:
             choques_profesor = self._detectar_choques_profesor(
-                prof_id, materia_id, grupo_id, 'Presencial', dias_lista, hora_i, hora_f
+                prof_id, materia_id, grupo_id, modalidad, dias_lista, hora_i, hora_f, excluir_asignacion_id=asig_id
             )
         except Exception as err:
             print(f"Error comprobando choques del profesor: {err}")
 
-        # 3. Comprobar disponibilidad registrada del profesor (si tiene horarios registrados)
-        disp_choque = False
-        disp_detalle = ""
-        with obtener_cursor() as ctx:
-            if ctx:
-                cur, conn = ctx
-                cur.execute(
-                    "SELECT dia, hora_inicio, hora_fin FROM profesor_disponibilidad WHERE profesor_id = %s",
-                    (prof_id,)
-                )
-                disp_rows = cur.fetchall()
-                if disp_rows:
-                    # El profesor tiene franjas restringidas. Verificar si el horario cae dentro de alguna.
-                    ini_min = self._minutos_hora_previa(hora_i)
-                    fin_min = self._minutos_hora_previa(hora_f)
-                    dias_indices = [self._dia_a_indice_previa(d) for d in dias_lista if self._dia_a_indice_previa(d) is not None]
-
-                    cubiertos = set()
-                    for d_idx in dias_indices:
-                        for row_dia, row_hi, row_hf in disp_rows:
-                            r_d_idx = self._dia_a_indice_previa(row_dia)
-                            r_ini = self._minutos_hora_previa(row_hi)
-                            r_fin = self._minutos_hora_previa(row_hf)
-                            if r_d_idx == d_idx and r_ini is not None and r_fin is not None:
-                                if r_ini <= ini_min and fin_min <= r_fin:
-                                    cubiertos.add(d_idx)
-                                    break
-                    if len(cubiertos) < len(dias_indices):
-                        disp_choque = True
-                        disp_detalle = f"El horario preasignado ({hora_i} - {hora_f} en {dias_str}) excede o no coincide con los periodos de disponibilidad registrados del profesor."
+        # 3. Comprobar disponibilidad registrada del profesor
+        disp_choque, disp_detalle = self._validar_disponibilidad_profesor(prof_id, dias_lista, hora_i, hora_f)
 
         # Si hay choques con otra clase o con su disponibilidad, abrir modal de 4 opciones
         if choques_profesor or disp_choque:
@@ -861,19 +1232,43 @@ class VentanaGestion:
             return
 
         # Sin conflicto: proceder con la asignación directa
-        self._aplicar_vinculacion_docente(asig_id, prof_id, estado='asignado')
+        self._aplicar_vinculacion_docente(
+            asig_id, prof_id, estado='asignado', modalidad=modalidad,
+            hora_i=hora_i if getattr(self, '_horario_manual_visible', False) else None,
+            hora_f=hora_f if getattr(self, '_horario_manual_visible', False) else None,
+            dias_str=dias_str if getattr(self, '_horario_manual_visible', False) else None,
+            dias_lista=dias_lista if getattr(self, '_horario_manual_visible', False) else None,
+            aula_sel=aula_sel if getattr(self, '_horario_manual_visible', False) else None
+        )
 
-    def _aplicar_vinculacion_docente(self, asig_id, prof_id, estado='asignado'):
+    def _aplicar_vinculacion_docente(self, asig_id, prof_id, estado='asignado', modalidad=None,
+                                    hora_i=None, hora_f=None, dias_str=None, dias_lista=None, aula_sel=None):
+        if modalidad is None and hasattr(self, 'combo_modalidad_vinculo'):
+            modalidad = self.combo_modalidad_vinculo.get().strip() or 'Presencial'
         with obtener_cursor() as ctx:
             if not ctx:
                 return False
             cur, conn = ctx
             try:
-                cur.execute("""
-                    UPDATE asignaciones
-                    SET profesor_id = %s, estado = %s
-                    WHERE asignacion_id = %s
-                """, (prof_id, estado, asig_id))
+                if hora_i and hora_f and dias_str is not None:
+                    cur.execute("""
+                        UPDATE asignaciones
+                        SET profesor_id = %s, estado = %s, modalidad = %s, hora_inicio = %s, hora_fin = %s, dias = %s
+                        WHERE asignacion_id = %s
+                    """, (prof_id, estado, modalidad, hora_i, hora_f, dias_str, asig_id))
+                    if aula_sel and dias_lista:
+                        cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (asig_id,))
+                        for d in dias_lista:
+                            cur.execute("""
+                                INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (asig_id, aula_sel, d, f"{hora_i}:00" if len(hora_i) == 5 else hora_i, f"{hora_f}:00" if len(hora_f) == 5 else hora_f))
+                else:
+                    cur.execute("""
+                        UPDATE asignaciones
+                        SET profesor_id = %s, estado = %s, modalidad = %s
+                        WHERE asignacion_id = %s
+                    """, (prof_id, estado, modalidad, asig_id))
                 conn.commit()
             except sqlite3.Error as err:
                 conn.rollback()
@@ -1160,6 +1555,14 @@ class VentanaGestion:
 
     def _cambiar_filtro_semestre(self, event=None):
         self._actualizar_materias_en_periodos()
+        if hasattr(self, 'combo_grupo_gestion'):
+            grupos = self._grupos_filtrados_actual()
+            self.combo_grupo_gestion['values'] = grupos
+            if grupos:
+                self.combo_grupo_gestion.set(grupos[0])
+            else:
+                self.combo_grupo_gestion.set('')
+            self._on_cambio_grupo_gestion()
 
     def _on_filtro_semestre_vp(self, preservar_seleccion=False):
         sel = self._sv_filtro_semestre_vp.get()
@@ -2863,16 +3266,9 @@ class VentanaGestion:
                 if not self.combo_periodos.get() and self.combo_periodos['values']:
                     self.combo_periodos.set(self.combo_periodos['values'][0])
                     self._cambiar_filtro_periodo()
-                if hasattr(self, 'combo_grupo_gestion'):
-                    todos_grupos_lista = []
-                    for s in sorted(self.grupos_por_semestre.keys(), key=lambda x: int(x) if str(x).isdigit() else 99):
-                        for g in self.grupos_por_semestre[s]:
-                            if g not in todos_grupos_lista:
-                                todos_grupos_lista.append(g)
-                    self.combo_grupo_gestion['values'] = todos_grupos_lista
-                    if todos_grupos_lista and not self.combo_grupo_gestion.get():
-                        self.combo_grupo_gestion.set(todos_grupos_lista[0])
-                        self._cargar_materias_grupo_gestion()
+                else:
+                    self._cambiar_filtro_semestre()
+                self._cargar_salones_para_manual()
 
                 self._actualizar_grupos_en_periodos()
             except sqlite3.Error as err:
@@ -3288,6 +3684,7 @@ class VentanaGestion:
                 self.combo_filtro_semestre.set(lista_sem[0])
         if hasattr(self, 'combo_filtro_semestre_vp'):
             self.combo_filtro_semestre_vp['values'] = ["Todos"] + lista_sem
+        self._cambiar_filtro_semestre()
         self.actualizar_vista_previa()
 
     def _materias_para_semestre(self, id_sem):
@@ -3774,7 +4171,7 @@ class VentanaGestion:
             return None
 
     def _detectar_choques_profesor(
-        self, profesor_id, materia_id, grupo_id, modalidad, dias, hora_i, hora_f
+        self, profesor_id, materia_id, grupo_id, modalidad, dias, hora_i, hora_f, excluir_asignacion_id=None
     ):
         inicio = self._minutos_hora_previa(hora_i)
         fin = self._minutos_hora_previa(hora_f)
@@ -3790,22 +4187,25 @@ class VentanaGestion:
             if ctx is None:
                 raise RuntimeError("No hay conexión a la base de datos para validar el horario.")
             cur, conn = ctx
-            cur.execute(
-                """
-                SELECT asignacion_id
-                FROM asignaciones
-                WHERE profesor_id = %s
-                  AND materia_id = %s
-                  AND grupo_id = %s
-                  AND modalidad = %s
-                  AND (estado IS NULL OR estado != 'cancelada')
-                ORDER BY asignacion_id
-                LIMIT 1
-                """,
-                (profesor_id, materia_id, grupo_id, modalidad)
-            )
-            asignacion_existente = cur.fetchone()
-            excluir_id = asignacion_existente['asignacion_id'] if asignacion_existente else None
+            if excluir_asignacion_id is not None:
+                excluir_id = excluir_asignacion_id
+            else:
+                cur.execute(
+                    """
+                    SELECT asignacion_id
+                    FROM asignaciones
+                    WHERE profesor_id = %s
+                      AND materia_id = %s
+                      AND grupo_id = %s
+                      AND modalidad = %s
+                      AND (estado IS NULL OR estado != 'cancelada')
+                    ORDER BY asignacion_id
+                    LIMIT 1
+                    """,
+                    (profesor_id, materia_id, grupo_id, modalidad)
+                )
+                asignacion_existente = cur.fetchone()
+                excluir_id = asignacion_existente['asignacion_id'] if asignacion_existente else None
 
             cur.execute(
                 """
@@ -3860,7 +4260,7 @@ class VentanaGestion:
                         })
         return choques
 
-    def _detectar_choques_grupo(self, grupo_id, materia_id, dias, hora_i, hora_f):
+    def _detectar_choques_grupo(self, grupo_id, materia_id, dias, hora_i, hora_f, excluir_asignacion_id=None):
         inicio = self._minutos_hora_previa(hora_i)
         fin = self._minutos_hora_previa(hora_f)
         dias_propuestos = {
@@ -3875,8 +4275,14 @@ class VentanaGestion:
             if ctx is None:
                 raise RuntimeError("No hay conexión a la base de datos para validar el horario.")
             cur, conn = ctx
+            if excluir_asignacion_id is not None:
+                cond_asig = "AND a.asignacion_id <> %s"
+                param_asig = excluir_asignacion_id
+            else:
+                cond_asig = "AND a.materia_id <> %s"
+                param_asig = materia_id
             cur.execute(
-                """
+                f"""
                 SELECT a.asignacion_id, a.dias, a.hora_inicio AS asignacion_inicio,
                        a.hora_fin AS asignacion_fin, m.nombre AS materia,
                        h.dia AS horario_dia, h.hora_inicio AS horario_inicio,
@@ -3885,10 +4291,10 @@ class VentanaGestion:
                 LEFT JOIN materias m ON m.materia_id = a.materia_id
                 LEFT JOIN horarios h ON h.asignacion_id = a.asignacion_id
                 WHERE a.grupo_id = %s
-                  AND a.materia_id <> %s
+                  {cond_asig}
                   AND (a.estado IS NULL OR a.estado != 'cancelada')
                 """,
-                (grupo_id, materia_id)
+                (grupo_id, param_asig)
             )
             for fila in cur.fetchall():
                 if fila['horario_dia'] is not None:
