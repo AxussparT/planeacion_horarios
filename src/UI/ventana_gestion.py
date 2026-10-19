@@ -278,6 +278,8 @@ class VentanaGestion:
         ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=8)
         ttk.Button(frame_filtros, text="📸 Crear Punto", command=self._crear_punto_restauracion).pack(side='left', padx=2)
         ttk.Button(frame_filtros, text="⏪ Restaurar Punto", command=self._abrir_dialogo_restaurar_punto).pack(side='left', padx=2)
+        ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=8)
+        ttk.Button(frame_filtros, text="📊 Sábana General", command=self._abrir_dialogo_sabana_horarios).pack(side='left', padx=2)
         self._progress_config = ttk.Progressbar(frame_filtros, mode='determinate', length=120)
 
         # ===== CONTENEDOR PRINCIPAL (izquierda / derecha) =====
@@ -3975,6 +3977,7 @@ class VentanaGestion:
         self.combo_ir_a.pack(side='left')
         self.combo_ir_a.bind("<<ComboboxSelected>>", self.saltar_a_entidad)
 
+        ttk.Button(frame_controles, text="📊 Sábana General", command=self._abrir_dialogo_sabana_horarios).pack(side='right', padx=4)
         ttk.Button(frame_controles, text="PDF", command=self.exportar_pdf_completo, width=6).pack(side='right', padx=2)
         ttk.Button(frame_controles, text="PNG", command=self.guardar_captura, width=6).pack(side='right', padx=2)
         ttk.Button(frame_controles, text="Excel", command=self.exportar_excel, width=6).pack(side='right', padx=2)
@@ -4873,6 +4876,149 @@ class VentanaGestion:
         ttk.Button(f_btns, text="🗑 Eliminar Punto", command=_eliminar_seleccionado).pack(side='left', padx=4)
         ttk.Button(f_btns, text="Cerrar", command=dialogo.destroy).pack(side='right', padx=4)
         ttk.Button(f_btns, text="⏪ Restaurar Punto Seleccionado", command=_ejecutar_restauracion).pack(side='right', padx=4)
+
+    def _abrir_dialogo_sabana_horarios(self):
+        from src.generador_sabana import GeneradorSabana
+
+        dialogo = tk.Toplevel(self.ventana)
+        dialogo.title("Sábana Matricial de Horarios (SAGA 2.0)")
+        dialogo.transient(self.ventana)
+        dialogo.grab_set()
+        dialogo.configure(background='#0A0F1E')
+        dialogo.geometry("540x420")
+        dialogo.resizable(False, False)
+
+        f_cont = ttk.Frame(dialogo, style='blue.TFrame')
+        f_cont.pack(fill='both', expand=True, padx=20, pady=16)
+
+        ttk.Label(
+            f_cont,
+            text="📊 Sábana Matricial Consolidada",
+            background='#0A0F1E',
+            foreground='#FFD700',
+            font=self._fuente_titulo
+        ).pack(anchor='w', pady=(0, 4))
+
+        ttk.Label(
+            f_cont,
+            text="Genera un reporte comparativo general donde los grupos de cada semestre se visualizan en columnas paralelas lado a lado para verificar la compatibilidad y distribución docente.",
+            background='#0A0F1E',
+            foreground='#B0BEC5',
+            font=self._fuente_label,
+            wraplength=500,
+            justify='left'
+        ).pack(anchor='w', pady=(0, 14))
+
+        f_form = ttk.Frame(f_cont, style='blue.TFrame')
+        f_form.pack(fill='x', pady=4)
+
+        # Filtro Semestre
+        ttk.Label(f_form, text="Semestre:", background='#0A0F1E', foreground='white', font=self._fuente_sub).grid(row=0, column=0, sticky='w', pady=8, padx=(0, 12))
+        combo_sem = ttk.Combobox(f_form, values=["Todos", "1", "2", "3", "4", "5", "6", "7", "8", "9"], state='readonly', width=16, font=self._fuente_label)
+        val_sem_actual = getattr(self, 'combo_filtro_semestre', None)
+        sem_ini = val_sem_actual.get() if val_sem_actual and val_sem_actual.get() else "Todos"
+        combo_sem.set(sem_ini)
+        combo_sem.grid(row=0, column=1, sticky='w', pady=8)
+
+        # Filtro Periodo
+        ttk.Label(f_form, text="Periodo:", background='#0A0F1E', foreground='white', font=self._fuente_sub).grid(row=1, column=0, sticky='w', pady=8, padx=(0, 12))
+        combo_per = ttk.Combobox(f_form, values=["Todos", "A", "B"], state='readonly', width=16, font=self._fuente_label)
+        per_act = getattr(self, 'combo_periodos', None)
+        combo_per.set(per_act.get() if per_act and per_act.get() in ("A", "B") else "Todos")
+        combo_per.grid(row=1, column=1, sticky='w', pady=8)
+
+        # Formato de exportación
+        ttk.Label(f_form, text="Formato:", background='#0A0F1E', foreground='white', font=self._fuente_sub).grid(row=2, column=0, sticky='w', pady=8, padx=(0, 12))
+        formato_var = tk.StringVar(value="excel")
+        f_fmt = ttk.Frame(f_form, style='blue.TFrame')
+        f_fmt.grid(row=2, column=1, sticky='w', pady=8)
+        rb_excel = ttk.Radiobutton(f_fmt, text="Excel (.xlsx) - Hoja por semestre", variable=formato_var, value="excel")
+        rb_excel.pack(anchor='w', pady=2)
+        rb_pdf = ttk.Radiobutton(f_fmt, text="PDF (.pdf) - Documento apaisado", variable=formato_var, value="pdf")
+        rb_pdf.pack(anchor='w', pady=2)
+
+        # Checkbox para abrir al terminar
+        abrir_var = tk.BooleanVar(value=True)
+        cb_abrir = ttk.Checkbutton(f_cont, text="Abrir archivo automáticamente al finalizar", variable=abrir_var)
+        cb_abrir.pack(anchor='w', pady=(10, 10))
+
+        # Botones de acción
+        f_btns = ttk.Frame(f_cont, style='blue.TFrame')
+        f_btns.pack(fill='x', side='bottom', pady=(10, 0))
+
+        def _ejecutar_generacion():
+            sem_sel = combo_sem.get().strip()
+            per_sel = combo_per.get().strip()
+            fmt_sel = formato_var.get()
+
+            ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            sem_nom = f"Semestre_{sem_sel}" if sem_sel != "Todos" else "Todos_Semestres"
+            per_nom = f"Periodo_{per_sel}" if per_sel != "Todos" else "Ambos_Periodos"
+
+            ruta_descargas = os.path.join(os.path.expanduser('~'), 'Downloads')
+            if fmt_sel == "excel":
+                ext = ".xlsx"
+                tipos = [("Archivos Excel", "*.xlsx")]
+                nombre_default = f"Sabana_Horarios_{sem_nom}_{per_nom}_{ts}.xlsx"
+            else:
+                ext = ".pdf"
+                tipos = [("Documentos PDF", "*.pdf")]
+                nombre_default = f"Sabana_Horarios_{sem_nom}_{per_nom}_{ts}.pdf"
+
+            ruta_destino = filedialog.asksaveasfilename(
+                title="Guardar Sábana de Horarios",
+                initialdir=ruta_descargas,
+                initialfile=nombre_default,
+                defaultextension=ext,
+                filetypes=tipos,
+                parent=dialogo
+            )
+            if not ruta_destino:
+                return
+
+            try:
+                dialogo.config(cursor="watch")
+                dialogo.update_idletasks()
+
+                if fmt_sel == "excel":
+                    res = GeneradorSabana.generar_excel_sabana(
+                        ruta_destino,
+                        filtro_semestre=sem_sel if sem_sel != "Todos" else None,
+                        filtro_periodo=per_sel if per_sel != "Todos" else None
+                    )
+                else:
+                    res = GeneradorSabana.generar_pdf_sabana(
+                        ruta_destino,
+                        filtro_semestre=sem_sel if sem_sel != "Todos" else None,
+                        filtro_periodo=per_sel if per_sel != "Todos" else None
+                    )
+
+                dialogo.config(cursor="")
+
+                if not res.get("exito"):
+                    messagebox.showwarning("Aviso", res.get("mensaje", "No se generó el archivo."), parent=dialogo)
+                    return
+
+                dialogo.destroy()
+
+                msg_exito = f"¡Sábana generada exitosamente!\n\nArchivo guardado en:\n{ruta_destino}\n\n• Semestres incluidos: {res.get('total_semestres', 1)}"
+                if 'total_grupos' in res:
+                    msg_exito += f"\n• Total de grupos procesados: {res['total_grupos']}"
+
+                messagebox.showinfo("Exportación Completa", msg_exito, parent=self.ventana)
+
+                if abrir_var.get():
+                    try:
+                        os.startfile(ruta_destino)
+                    except Exception as e_open:
+                        print(f"No se pudo abrir automáticamente: {e_open}")
+
+            except Exception as ex:
+                dialogo.config(cursor="")
+                messagebox.showerror("Error al generar sábana", f"Ocurrió un error inesperado:\n{ex}", parent=dialogo)
+
+        ttk.Button(f_btns, text="Cancelar", command=dialogo.destroy).pack(side='right', padx=4)
+        ttk.Button(f_btns, text="📥 Generar Reporte", command=_ejecutar_generacion).pack(side='right', padx=4)
 
     def _dibujar_previa_horario_grupo(self, canvas=None):
         if canvas is None:
