@@ -275,6 +275,9 @@ class VentanaGestion:
         ttk.Button(frame_filtros, text="Guardar Config", command=self._guardar_configuracion).pack(side='left', padx=2)
         ttk.Button(frame_filtros, text="Actualizar Config", command=self._actualizar_configuracion).pack(side='left', padx=2)
         ttk.Button(frame_filtros, text="Cargar Config", command=self._cargar_configuracion).pack(side='left', padx=2)
+        ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=8)
+        ttk.Button(frame_filtros, text="📸 Crear Punto", command=self._crear_punto_restauracion).pack(side='left', padx=2)
+        ttk.Button(frame_filtros, text="⏪ Restaurar Punto", command=self._abrir_dialogo_restaurar_punto).pack(side='left', padx=2)
         self._progress_config = ttk.Progressbar(frame_filtros, mode='determinate', length=120)
 
         # ===== CONTENEDOR PRINCIPAL (izquierda / derecha) =====
@@ -604,6 +607,9 @@ class VentanaGestion:
         f_acciones.pack(fill='x', padx=6, pady=4)
         ttk.Button(f_acciones, text="Liberar", command=self.borrar_asignacion_seleccionada).pack(side='left', padx=4)
         ttk.Button(f_acciones, text="Borrar Todas", command=self.formatear_asignaciones).pack(side='left', padx=4)
+        ttk.Separator(f_acciones, orient='vertical').pack(side='left', fill='y', padx=8)
+        ttk.Button(f_acciones, text="📸 Snapshot", command=self._crear_punto_restauracion).pack(side='left', padx=4)
+        ttk.Button(f_acciones, text="⏪ Deshacer / Restaurar", command=self._abrir_dialogo_restaurar_punto).pack(side='left', padx=4)
 
         self.frame_previa_horario = ttk.LabelFrame(
             self.frame_der, text="Horario del grupo", style='blue.TFrame'
@@ -2975,6 +2981,16 @@ class VentanaGestion:
         ):
             return
 
+        # Crear respaldo automático previo por seguridad
+        try:
+            from src.gestor_restauracion import GestorRestauracion
+            GestorRestauracion.crear_punto(
+                nombre="Auto-respaldo antes de borrar todo",
+                descripcion="Creado automáticamente antes de vaciar las asignaciones"
+            )
+        except Exception as e:
+            print(f"Error creando auto-respaldo previo: {e}")
+
         self._ejecutar_eliminacion_en_hilo(
             titulo="Borrando todas las asignaciones...",
             mensaje="Vaciando la base de datos de horarios y asignaciones...",
@@ -3082,6 +3098,16 @@ class VentanaGestion:
         if respuesta is None:
             return
         modo_seleccionado = "completo" if respuesta else "parcial"
+
+        # Crear respaldo automático previo por seguridad
+        try:
+            from src.gestor_restauracion import GestorRestauracion
+            GestorRestauracion.crear_punto(
+                nombre=f"Auto-respaldo antes de asignación ({modo_seleccionado})",
+                descripcion=f"Generado automáticamente antes de asignación automática ({modo_seleccionado})"
+            )
+        except Exception as e:
+            print(f"Error creando auto-respaldo previo: {e}")
 
         self._en_operacion = True
         loading = tk.Toplevel(self.ventana)
@@ -4705,6 +4731,148 @@ class VentanaGestion:
             f"• Materias reacomodadas: {res['total_reacomodadas']} de {res['total_solicitadas']}\n"
             f"• Se generó una nueva distribución horaria en {res.get('intentos', 1)} intento(s)."
         )
+
+    def _crear_punto_restauracion(self, nombre_predeterminado=None):
+        from src.gestor_restauracion import GestorRestauracion
+        from tkinter import simpledialog
+        def_name = nombre_predeterminado or f"Respaldo {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        nombre = simpledialog.askstring(
+            "Crear Punto de Restauración",
+            "Ingrese un nombre para identificar este punto de restauración:",
+            initialvalue=def_name,
+            parent=self.ventana
+        )
+        if not nombre:
+            return
+
+        res = GestorRestauracion.crear_punto(nombre=nombre)
+        if res.get("exito"):
+            messagebox.showinfo(
+                "Punto Creado",
+                f"Punto de restauración '{nombre}' guardado con éxito.\n\n"
+                f"• Asignaciones respaldadas: {res['total_asignaciones']}\n"
+                f"• Horarios respaldados: {res['total_horarios']}\n"
+                f"• Fecha: {res['fecha']}"
+            )
+        else:
+            messagebox.showerror("Error", res.get("mensaje", "No se pudo crear el punto de restauración."))
+
+    def _abrir_dialogo_restaurar_punto(self):
+        from src.gestor_restauracion import GestorRestauracion
+        puntos = GestorRestauracion.listar_puntos()
+        if not puntos:
+            messagebox.showinfo(
+                "Sin Puntos de Restauración",
+                "Aún no existen puntos de restauración creados.\nPuede crear uno usando el botón '📸 Crear Punto'."
+            )
+            return
+
+        dialogo = tk.Toplevel(self.ventana)
+        dialogo.title("Puntos de Restauración (Rollback)")
+        dialogo.transient(self.ventana)
+        dialogo.grab_set()
+        dialogo.configure(background='#0A0F1E')
+        dialogo.geometry("700x440")
+
+        f_cont = ttk.Frame(dialogo, style='blue.TFrame')
+        f_cont.pack(fill='both', expand=True, padx=16, pady=14)
+
+        ttk.Label(
+            f_cont,
+            text="⏪ Restaurar Estado Previo (Rollback)",
+            background='#0A0F1E',
+            foreground='#FFD700',
+            font=self._fuente_titulo
+        ).pack(anchor='w', pady=(0, 4))
+
+        ttk.Label(
+            f_cont,
+            text="Seleccione un punto de restauración para regresar las asignaciones y horarios a ese estado:",
+            background='#0A0F1E',
+            foreground='#B0BEC5',
+            font=self._fuente_label
+        ).pack(anchor='w', pady=(0, 8))
+
+        f_tabla = ttk.Frame(f_cont, style='blue.TFrame')
+        f_tabla.pack(fill='both', expand=True, pady=4)
+
+        cols = ('ID', 'Fecha', 'Nombre', 'Descripción', 'Asignaciones', 'Horarios')
+        tree = ttk.Treeview(f_tabla, columns=cols, show='headings', height=10)
+        tree.heading('ID', text='ID')
+        tree.heading('Fecha', text='Fecha / Hora')
+        tree.heading('Nombre', text='Nombre del Respaldo')
+        tree.heading('Descripción', text='Descripción')
+        tree.heading('Asignaciones', text='Asignaciones')
+        tree.heading('Horarios', text='Horarios')
+
+        tree.column('ID', width=40, anchor='center')
+        tree.column('Fecha', width=130, anchor='center')
+        tree.column('Nombre', width=180, anchor='w')
+        tree.column('Descripción', width=120, anchor='w')
+        tree.column('Asignaciones', width=80, anchor='center')
+        tree.column('Horarios', width=70, anchor='center')
+
+        sb_v = ttk.Scrollbar(f_tabla, orient='vertical', command=tree.yview)
+        tree.configure(yscroll=sb_v.set)
+        sb_v.pack(side='right', fill='y')
+        tree.pack(fill='both', expand=True)
+
+        for p in puntos:
+            tree.insert('', 'end', iid=str(p['punto_id']), values=(
+                p['punto_id'], p['fecha_creacion'], p['nombre'],
+                p.get('descripcion') or '', p['total_asignaciones'], p['total_horarios']
+            ))
+
+        f_btns = ttk.Frame(f_cont, style='blue.TFrame')
+        f_btns.pack(fill='x', pady=(10, 0))
+
+        def _ejecutar_restauracion():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Aviso", "Seleccione un punto de restauración de la lista.", parent=dialogo)
+                return
+            p_id = int(sel[0])
+            item = tree.item(sel[0])['values']
+            nom_punto = item[2]
+            fecha_punto = item[1]
+
+            if not messagebox.askyesno(
+                "Confirmar Restauración",
+                f"¿Está seguro de restaurar el sistema al punto '{nom_punto}' ({fecha_punto})?\n\n"
+                f"⚠ Se guardará automáticamente una copia del estado actual antes de proceder, "
+                f"y se restaurarán las asignaciones y horarios correspondientes a dicho punto.",
+                parent=dialogo
+            ):
+                return
+
+            res = GestorRestauracion.restaurar_punto(p_id)
+            if res.get("exito"):
+                dialogo.destroy()
+                self._cargar_materias_grupo_gestion()
+                self.actualizar_vista_previa()
+                self._cargar_previa_horario_grupo()
+                self._cargar_tensor_diferido(forzar=True)
+                messagebox.showinfo(
+                    "Restauración Completada",
+                    f"¡El sistema ha sido restaurado con éxito al punto '{nom_punto}'!\n\n"
+                    f"• Asignaciones restauradas: {res['total_asignaciones']}\n"
+                    f"• Horarios restaurados: {res['total_horarios']}"
+                )
+            else:
+                messagebox.showerror("Error al Restaurar", res.get("mensaje", "Error desconocido."), parent=dialogo)
+
+        def _eliminar_seleccionado():
+            sel = tree.selection()
+            if not sel:
+                return
+            p_id = int(sel[0])
+            if messagebox.askyesno("Eliminar Punto", "¿Desea eliminar el punto de restauración seleccionado?", parent=dialogo):
+                GestorRestauracion.eliminar_punto(p_id)
+                tree.delete(sel[0])
+
+        ttk.Button(f_btns, text="🗑 Eliminar Punto", command=_eliminar_seleccionado).pack(side='left', padx=4)
+        ttk.Button(f_btns, text="Cerrar", command=dialogo.destroy).pack(side='right', padx=4)
+        ttk.Button(f_btns, text="⏪ Restaurar Punto Seleccionado", command=_ejecutar_restauracion).pack(side='right', padx=4)
 
     def _dibujar_previa_horario_grupo(self, canvas=None):
         if canvas is None:
