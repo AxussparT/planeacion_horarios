@@ -191,6 +191,41 @@ class VentanaPrincipal:
         self._limitar_entrada(self.entry_grupo_nivel, 2, solo_digitos=True)
         gf_frame.columnconfigure(1, weight=1)
 
+        self.entry_grupo_nivel.bind("<KeyRelease>", lambda e: self._on_cambio_semestre_grupo())
+        self.entry_grupo_nivel.bind("<FocusOut>", lambda e: self._on_cambio_semestre_grupo())
+
+        lbl_mat_grp = ttk.Label(self.frame_izquierdo_principal, text="Materias del semestre:", style='fondo.TLabel', font=self._fuente_sub)
+        lbl_mat_grp.pack(anchor='w', padx=25, pady=(8, 2))
+
+        self.frame_contenedor_mat_grp = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
+        self.frame_contenedor_mat_grp.pack(fill='x', padx=25, pady=(0, 5))
+
+        self.canvas_mat_grp = tk.Canvas(self.frame_contenedor_mat_grp, height=130, highlightthickness=1, highlightbackground='#2A3656', background='#0D152A')
+        self.sb_mat_grp = ttk.Scrollbar(self.frame_contenedor_mat_grp, orient='vertical', command=self.canvas_mat_grp.yview)
+        self.frame_mat_grp_checks = ttk.Frame(self.canvas_mat_grp, style='blue.TFrame')
+
+        self.frame_mat_grp_checks.bind(
+            '<Configure>', lambda e: self.canvas_mat_grp.configure(scrollregion=self.canvas_mat_grp.bbox('all'))
+        )
+        self._canvas_mat_grp_window = self.canvas_mat_grp.create_window((0, 0), window=self.frame_mat_grp_checks, anchor='nw')
+
+        def _ajustar_ancho_mat_grp(event):
+            self.canvas_mat_grp.itemconfig(self._canvas_mat_grp_window, width=event.width)
+        self.canvas_mat_grp.bind('<Configure>', _ajustar_ancho_mat_grp)
+
+        def _scroll_mat_grp(event):
+            self.canvas_mat_grp.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.canvas_mat_grp.bind("<MouseWheel>", _scroll_mat_grp)
+        self.frame_mat_grp_checks.bind("<MouseWheel>", _scroll_mat_grp)
+
+        self.canvas_mat_grp.configure(yscrollcommand=self.sb_mat_grp.set)
+        self.canvas_mat_grp.pack(side='left', fill='both', expand=True)
+        self.sb_mat_grp.pack(side='right', fill='y')
+
+        self.materias_grupo_vars = {}
+        self._lbl_hint_mat_grp = ttk.Label(self.frame_mat_grp_checks, text="Ingresa un semestre para seleccionar materias", style='fondo.TLabel', foreground='#7E8B9B', font=self._fuente_sub)
+        self._lbl_hint_mat_grp.pack(padx=10, pady=10)
+
         f_btns_grupo = ttk.Frame(self.frame_izquierdo_principal, style='blue.TFrame')
         f_btns_grupo.pack(fill='x', padx=25, pady=15)
         f_btns_grupo.columnconfigure((0, 1), weight=1)
@@ -1224,19 +1259,86 @@ class VentanaPrincipal:
 
     # =================== LÓGICA GRUPOS ===================
 
+    def _on_cambio_semestre_grupo(self, materias_preseleccionadas=None):
+        sem_str = self.entry_grupo_nivel.get().strip()
+        for w in self.frame_mat_grp_checks.winfo_children():
+            w.destroy()
+        self.materias_grupo_vars.clear()
+
+        if not sem_str or not sem_str.isdigit():
+            ttk.Label(
+                self.frame_mat_grp_checks,
+                text="Ingresa un semestre para seleccionar materias",
+                style='fondo.TLabel',
+                foreground='#7E8B9B',
+                font=self._fuente_sub
+            ).pack(padx=10, pady=10)
+            return
+
+        sid = int(sem_str)
+        conn = get_conexion()
+        if not conn:
+            return
+        cur = conn.cursor()
+        cur.execute("SELECT materia_id, nombre, tipo FROM materias WHERE semestre_id = %s ORDER BY materia_id", (sid,))
+        materias_sem = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not materias_sem:
+            ttk.Label(
+                self.frame_mat_grp_checks,
+                text=f"No hay materias registradas para el semestre {sid}",
+                style='fondo.TLabel',
+                foreground='#FFB020',
+                font=self._fuente_sub
+            ).pack(padx=10, pady=10)
+            return
+
+        for m_id, m_nom, m_tipo in materias_sem:
+            marcado = (m_id in materias_preseleccionadas) if materias_preseleccionadas is not None else False
+            var = tk.BooleanVar(value=marcado)
+            self.materias_grupo_vars[m_id] = (var, m_nom)
+            tipo_ui = self._ui_tipo_materia_salon(m_tipo)
+            cb = ttk.Checkbutton(
+                self.frame_mat_grp_checks,
+                text=f"{m_id} - {m_nom} ({tipo_ui})",
+                variable=var,
+                style='Custom.TCheckbutton'
+            )
+            cb.pack(fill='x', padx=8, pady=3, anchor='w')
+            cb.bind("<MouseWheel>", lambda e: self.canvas_mat_grp.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+
     def cargar_grupo_seleccionado(self, event):
         item = self.tabla_grupos.focus()
         if not item:
             return
         v = self.tabla_grupos.item(item, "values")
+        grupo_id = str(v[0]).strip().upper()
+        nivel = str(v[1]).strip()
         self.entry_grupo_id.delete(0, tk.END)
         self.entry_grupo_nivel.delete(0, tk.END)
-        self.entry_grupo_id.insert(0, v[0])
-        self.entry_grupo_nivel.insert(0, v[1])
+        self.entry_grupo_id.insert(0, grupo_id)
+        self.entry_grupo_nivel.insert(0, nivel)
+
+        materias_vinculadas = set()
+        conn = get_conexion()
+        if conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("SELECT materia_id FROM grupo_materias WHERE grupo_id = %s", (grupo_id,))
+                materias_vinculadas = {row[0] for row in cur.fetchall()}
+            except Exception:
+                materias_vinculadas = set()
+            finally:
+                cur.close()
+                conn.close()
+
+        self._on_cambio_semestre_grupo(materias_preseleccionadas=materias_vinculadas)
 
     def evento_grupos(self):
         self.master.update_idletasks()
-        g = self.entry_grupo_id.get().strip()
+        g = self.entry_grupo_id.get().strip().upper()
         n = self.entry_grupo_nivel.get().strip()
         if not g or len(g) > 20:
             messagebox.showwarning("Aviso", "El identificador del grupo es obligatorio y debe tener hasta 20 caracteres.")
@@ -1244,11 +1346,40 @@ class VentanaPrincipal:
         if not n.isascii() or not n.isdigit() or len(n) > 2:
             messagebox.showwarning("Aviso", "El semestre debe ser un número entero de hasta 2 dígitos.")
             return
-        registro = grupo(g, n)
+
+        seleccionadas = [(m_id, nom) for m_id, (var, nom) in self.materias_grupo_vars.items() if var.get()]
+        if not seleccionadas:
+            messagebox.showwarning("Aviso", "Debes seleccionar al menos una materia para vincular al grupo.")
+            return
+
+        lista_txt = "\n".join(f"- {nom} ({m_id})" for m_id, nom in seleccionadas)
+        mensaje = (
+            f"El grupo {g} tiene estas materias seleccionadas:\n\n"
+            f"{lista_txt}\n\n"
+            "¿Desea guardar esta configuración?"
+        )
+        if not messagebox.askyesno("Confirmar Configuración", mensaje):
+            # No - modificar configuración
+            return
+
+        registro = grupo(g, n, materias=[m[0] for m in seleccionadas])
         if registro.exito:
-            self.entry_grupo_id.delete(0, tk.END)
-            self.entry_grupo_nivel.delete(0, tk.END)
+            self.limpiar_campos_grupo()
             self._refresh_all()
+
+    def limpiar_campos_grupo(self):
+        self.entry_grupo_id.delete(0, tk.END)
+        self.entry_grupo_nivel.delete(0, tk.END)
+        self.materias_grupo_vars.clear()
+        for w in self.frame_mat_grp_checks.winfo_children():
+            w.destroy()
+        ttk.Label(
+            self.frame_mat_grp_checks,
+            text="Ingresa un semestre para seleccionar materias",
+            style='fondo.TLabel',
+            foreground='#7E8B9B',
+            font=self._fuente_sub
+        ).pack(padx=10, pady=10)
 
     def eliminar_grupo(self):
         grupo_id = self.entry_grupo_id.get().strip().upper()
@@ -1264,14 +1395,14 @@ class VentanaPrincipal:
                 try:
                     cur.execute("DELETE FROM horarios WHERE asignacion_id IN (SELECT asignacion_id FROM asignaciones WHERE grupo_id = %s)", (grupo_id,))
                     cur.execute("DELETE FROM asignaciones WHERE grupo_id = %s", (grupo_id,))
+                    cur.execute("DELETE FROM grupo_materias WHERE grupo_id = %s", (grupo_id,))
                     cur.execute("DELETE FROM grupos WHERE grupo_id = %s", (grupo_id,))
                     exito = True
                 except Exception as e:
                     conn.rollback()
                     messagebox.showerror("Error de Base de Datos", str(e))
             if exito:
-                self.entry_grupo_id.delete(0, tk.END)
-                self.entry_grupo_nivel.delete(0, tk.END)
+                self.limpiar_campos_grupo()
                 self._refresh_all()
                 messagebox.showinfo("Éxito", "Grupo eliminado correctamente.")
 

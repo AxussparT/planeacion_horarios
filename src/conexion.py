@@ -35,6 +35,16 @@ CREATE TABLE IF NOT EXISTS grupos (
     nivel INTEGER DEFAULT NULL
 );
 
+CREATE TABLE IF NOT EXISTS grupo_materias (
+    grupo_id TEXT NOT NULL,
+    materia_id TEXT NOT NULL,
+    PRIMARY KEY (grupo_id, materia_id),
+    FOREIGN KEY (grupo_id) REFERENCES grupos(grupo_id) ON DELETE CASCADE,
+    FOREIGN KEY (materia_id) REFERENCES materias(materia_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_grupo_materias_grupo ON grupo_materias(grupo_id);
+CREATE INDEX IF NOT EXISTS idx_grupo_materias_materia ON grupo_materias(materia_id);
+
 CREATE TABLE IF NOT EXISTS salones (
     salon_id TEXT PRIMARY KEY,
     capacidad INTEGER NOT NULL DEFAULT 0,

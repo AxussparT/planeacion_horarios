@@ -3,9 +3,10 @@ from tkinter import messagebox
 import sqlite3
 
 class grupo:
-    def __init__(self, grupo_id, nivel):
+    def __init__(self, grupo_id, nivel, materias=None):
         self.grupo_id = str(grupo_id).strip().upper()
         self.nivel = str(nivel).strip()
+        self.materias = materias
         self.exito = False
 
         if not self.grupo_id or len(self.grupo_id) > 20:
@@ -31,10 +32,17 @@ class grupo:
                 cur.execute("SELECT grupo_id FROM grupos WHERE grupo_id = %s", (self.grupo_id,))
                 if cur.fetchone():
                     cur.execute("UPDATE grupos SET nivel = %s WHERE grupo_id = %s", (self.nivel, self.grupo_id))
-                    messagebox.showinfo("Éxito", f"Grupo '{self.grupo_id}' actualizado correctamente")
+                    msg = f"Grupo '{self.grupo_id}' actualizado correctamente"
                 else:
                     cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, %s)", (self.grupo_id, self.nivel))
-                    messagebox.showinfo("Éxito", f"Grupo '{self.grupo_id}' guardado correctamente")
+                    msg = f"Grupo '{self.grupo_id}' guardado correctamente"
+
+                if self.materias is not None:
+                    cur.execute("DELETE FROM grupo_materias WHERE grupo_id = %s", (self.grupo_id,))
+                    for m_id in self.materias:
+                        cur.execute("INSERT OR IGNORE INTO grupo_materias (grupo_id, materia_id) VALUES (%s, %s)", (self.grupo_id, m_id))
+
+                messagebox.showinfo("Éxito", msg)
                 return True
             except sqlite3.Error as err:
                 conn.rollback()
