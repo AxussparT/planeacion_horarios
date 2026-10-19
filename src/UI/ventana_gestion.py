@@ -129,6 +129,8 @@ class VentanaGestion:
         self._after_busqueda_profesores_id = None
         self._after_busqueda_asignaciones_id = None
         self._disponibilidad_profesores = {}
+        self._materia_grupo_seleccionada_id = None
+        self._materias_grupo_cache = {}
         
         self._fuente_titulo = font.Font(family="Roboto", size=18, weight="bold")
         self._fuente_sub = font.Font(family="Roboto", size=12)
@@ -292,8 +294,82 @@ class VentanaGestion:
         self.canvas_izq.pack(side='left', fill='both', expand=True, padx=(10, 5))
         self.sb_izq.pack(side='left', fill='y')
 
-        # --- Profesor info (read-only when loaded) ---
-        f_prof_info = ttk.LabelFrame(self.frame_izq, text="Profesor", style='blue.TFrame')
+        # --- Selector de Grupo y Detalle ---
+        f_grupo_sel = ttk.LabelFrame(self.frame_izq, text="Gestión de Grupo y Materias Preasignadas", style='blue.TFrame')
+        f_grupo_sel.pack(fill='x', padx=8, pady=4)
+
+        f_grupo_linea = ttk.Frame(f_grupo_sel, style='blue.TFrame')
+        f_grupo_linea.pack(fill='x', padx=6, pady=4)
+
+        ttk.Label(f_grupo_linea, text="Grupo:", background='#0A0F1E', foreground='white', font=self._fuente_sub).pack(side='left', padx=(0, 6))
+        self._sv_grupo_gestion = tk.StringVar()
+        self.combo_grupo_gestion = ttk.Combobox(f_grupo_linea, textvariable=self._sv_grupo_gestion, font=self._fuente_label, state='readonly', width=16)
+        self.combo_grupo_gestion.pack(side='left', padx=(0, 10))
+        self.combo_grupo_gestion.bind("<<ComboboxSelected>>", self._on_cambio_grupo_gestion)
+
+        ttk.Button(f_grupo_linea, text="Refrescar", command=self._cargar_materias_grupo_gestion).pack(side='left', padx=4)
+
+        self._lbl_info_grupo_gestion = ttk.Label(f_grupo_sel, text="", background='#0A0F1E', foreground='#FFD700', font=self._fuente_label)
+        self._lbl_info_grupo_gestion.pack(fill='x', padx=8, pady=(2, 4))
+
+        # --- Tabla de Materias Preasignadas del Grupo ---
+        f_tabla_mat_grp = ttk.Frame(f_grupo_sel, style='blue.TFrame')
+        f_tabla_mat_grp.pack(fill='both', expand=True, padx=6, pady=4)
+
+        cols_mg = ('Materia', 'Aula', 'Días', 'Horario', 'Profesor', 'Estado')
+        self.tabla_materias_grupo = ttk.Treeview(f_tabla_mat_grp, columns=cols_mg, show='headings', height=7)
+        self.tabla_materias_grupo.heading('Materia', text='Materia')
+        self.tabla_materias_grupo.heading('Aula', text='Aula')
+        self.tabla_materias_grupo.heading('Días', text='Días')
+        self.tabla_materias_grupo.heading('Horario', text='Horario')
+        self.tabla_materias_grupo.heading('Profesor', text='Profesor Asignado')
+        self.tabla_materias_grupo.heading('Estado', text='Estado')
+
+        self.tabla_materias_grupo.column('Materia', width=140, anchor='w')
+        self.tabla_materias_grupo.column('Aula', width=50, anchor='center')
+        self.tabla_materias_grupo.column('Días', width=100, anchor='center')
+        self.tabla_materias_grupo.column('Horario', width=90, anchor='center')
+        self.tabla_materias_grupo.column('Profesor', width=140, anchor='w')
+        self.tabla_materias_grupo.column('Estado', width=70, anchor='center')
+
+        sb_mg_v = ttk.Scrollbar(f_tabla_mat_grp, orient='vertical', command=self.tabla_materias_grupo.yview)
+        self.tabla_materias_grupo.configure(yscroll=sb_mg_v.set)
+        sb_mg_v.pack(side='right', fill='y')
+        self.tabla_materias_grupo.pack(fill='both', expand=True)
+        self.tabla_materias_grupo.bind("<<TreeviewSelect>>", self._on_select_materia_grupo_gestion)
+
+        # --- Panel de Asignación de Docente a la Materia Preasignada ---
+        f_docente_vinculo = ttk.LabelFrame(self.frame_izq, text="Vincular Profesor a Materia Seleccionada", style='blue.TFrame')
+        f_docente_vinculo.pack(fill='x', padx=8, pady=6)
+
+        f_doc_sel = ttk.Frame(f_docente_vinculo, style='blue.TFrame')
+        f_doc_sel.pack(fill='x', padx=6, pady=4)
+
+        ttk.Label(f_doc_sel, text="Profesor:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 4))
+        self.entry_prof_vinculo = ttk.Entry(f_doc_sel, font=self._fuente_label, state='readonly', width=30)
+        self.entry_prof_vinculo.pack(side='left', fill='x', expand=True, padx=(0, 6))
+
+        self._btn_vincular_profesor = ttk.Button(
+            f_doc_sel,
+            text="Vincular / Asignar Docente",
+            command=self._ejecutar_vinculacion_docente,
+            state='disabled'
+        )
+        self._btn_vincular_profesor.pack(side='left', padx=2)
+
+        self._btn_desvincular_profesor = ttk.Button(
+            f_doc_sel,
+            text="Desvincular (Sin Profesor)",
+            command=self._desvincular_docente_materia,
+            state='disabled'
+        )
+        self._btn_desvincular_profesor.pack(side='left', padx=2)
+
+        self._lbl_estado_vinculo = ttk.Label(f_docente_vinculo, text="Selecciona una materia arriba y un profesor a la derecha.", background='#0A0F1E', foreground='#7E8B9B', font=self._fuente_label)
+        self._lbl_estado_vinculo.pack(fill='x', padx=8, pady=(2, 6))
+
+        # --- Profesor info y Periodos legacy (colapsable / secundario) ---
+        f_prof_info = ttk.LabelFrame(self.frame_izq, text="Detalle del Profesor Seleccionado", style='blue.TFrame')
         f_prof_info.pack(fill='x', padx=8, pady=4)
 
         f_cuenta = ttk.Frame(f_prof_info, style='blue.TFrame')
@@ -308,23 +384,15 @@ class VentanaGestion:
         self.entry_nombre_prof = ttk.Entry(f_nombre, font=self._fuente_label, state='readonly')
         self.entry_nombre_prof.pack(side='left', fill='x', expand=True, padx=(6, 0))
 
-        btn_limpiar = ttk.Button(f_prof_info, text="Limpiar", command=self._limpiar_profesor_seleccionado)
+        btn_limpiar = ttk.Button(f_prof_info, text="Limpiar Profesor", command=self._limpiar_profesor_seleccionado)
         btn_limpiar.pack(pady=(2, 4))
 
-        # --- Horas info ---
         self._label_horas = ttk.Label(self.frame_izq, text="", background='#0A0F1E', foreground='#FFD700', font=self._fuente_label)
         self._label_horas.pack(fill='x', padx=10, pady=(2, 0))
 
-        # --- Periodos de Asignacion (con disponibilidad) ---
-        f_periodos = ttk.LabelFrame(self.frame_izq, text="Periodos del Profesor", style='blue.TFrame')
-        f_periodos.pack(fill='both', expand=True, padx=8, pady=4)
-
+        # Contenedor para periodos de disponibilidad manual si se requiere
         self._periodos_asignacion = []
-        self._periodos_frame = ttk.Frame(f_periodos, style='blue.TFrame')
-        self._periodos_frame.pack(fill='both', expand=True, padx=4, pady=4)
-
-        self._btn_agregar_periodo = ttk.Button(f_periodos, text="+ Agregar Periodo", command=self._agregar_periodo_vacio)
-        self._btn_agregar_periodo.pack(pady=4)
+        self._periodos_frame = ttk.Frame(self.frame_izq, style='blue.TFrame')
 
         # ===== Lado derecho: Profesores y Vista Previa (con scroll) =====
         self.canvas_der = tk.Canvas(frame_contenedor, highlightthickness=0, background='#0A0F1E')
@@ -547,6 +615,515 @@ class VentanaGestion:
         self._after_busqueda_asignaciones_id = None
         self.actualizar_vista_previa()
 
+    def _on_cambio_grupo_gestion(self, event=None):
+        self._materia_grupo_seleccionada_id = None
+        self._cargar_materias_grupo_gestion()
+        self._actualizar_estado_boton_vinculo()
+        if hasattr(self, '_sv_filtro_grupo_vp'):
+            g = self._sv_grupo_gestion.get().strip()
+            if g:
+                self._seleccionar_grupo_previa(g)
+
+    def _cargar_materias_grupo_gestion(self):
+        if not hasattr(self, 'tabla_materias_grupo'):
+            return
+        for item in self.tabla_materias_grupo.get_children():
+            self.tabla_materias_grupo.delete(item)
+
+        grupo_id = self._sv_grupo_gestion.get().strip()
+        if not grupo_id:
+            self._lbl_info_grupo_gestion.config(text="Selecciona un grupo para ver sus materias preasignadas.")
+            return
+
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return
+            cur, conn = ctx
+            cur.execute("""
+                SELECT 
+                    a.asignacion_id,
+                    a.materia_id,
+                    IFNULL(m.nombre, a.materia_id) AS materia_nombre,
+                    IFNULL(a.dias, '') AS dias,
+                    a.hora_inicio,
+                    a.hora_fin,
+                    a.profesor_id,
+                    IFNULL(p.nombre, 'Sin profesor') AS prof_nombre,
+                    IFNULL(a.estado, 'no asignado') AS estado,
+                    GROUP_CONCAT(DISTINCT h.salon_id) AS salones
+                FROM asignaciones a
+                LEFT JOIN materias m ON a.materia_id = m.materia_id
+                LEFT JOIN profesores p ON a.profesor_id = p.profesor_id
+                LEFT JOIN horarios h ON a.asignacion_id = h.asignacion_id
+                WHERE a.grupo_id = %s AND (a.estado IS NULL OR a.estado != 'cancelada')
+                GROUP BY a.asignacion_id
+                ORDER BY a.materia_id
+            """, (grupo_id,))
+            filas = cur.fetchall()
+
+        self._materias_grupo_cache = {}
+        total_asignadas = 0
+        for f in filas:
+            asig_id, m_id, m_nom, dias, hi, hf, prof_id, prof_nom, estado, salones = f
+            hi_str = self._hora_db_a_str(hi) if hi else ""
+            hf_str = self._hora_db_a_str(hf) if hf else ""
+            horario_str = f"{hi_str} - {hf_str}" if hi_str and hf_str else "Sin horario"
+            aula_str = salones if salones else "Sin aula"
+            p_display = "Sin profesor" if (not prof_id or prof_id == 'SIN_ASIGNAR') else prof_nom
+            if p_display != "Sin profesor":
+                total_asignadas += 1
+
+            info_asig = {
+                "asignacion_id": asig_id,
+                "materia_id": m_id,
+                "materia_nombre": m_nom,
+                "dias": dias,
+                "hora_inicio": hi_str,
+                "hora_fin": hf_str,
+                "profesor_id": prof_id,
+                "profesor_nombre": p_display,
+                "estado": estado,
+                "salon_id": aula_str
+            }
+            self._materias_grupo_cache[str(asig_id)] = info_asig
+
+            self.tabla_materias_grupo.insert(
+                '', 'end', iid=str(asig_id),
+                values=(f"{m_id} - {m_nom}", aula_str, dias, horario_str, p_display, estado.upper())
+            )
+
+        self._lbl_info_grupo_gestion.config(
+            text=f"Grupo: {grupo_id} | Total Materias: {len(filas)} | Con Profesor: {total_asignadas} / {len(filas)}"
+        )
+        self._actualizar_estado_boton_vinculo()
+
+    def _on_select_materia_grupo_gestion(self, event=None):
+        sel = self.tabla_materias_grupo.selection()
+        if not sel:
+            self._materia_grupo_seleccionada_id = None
+        else:
+            self._materia_grupo_seleccionada_id = sel[0]
+        self._actualizar_estado_boton_vinculo()
+
+    def _actualizar_estado_boton_vinculo(self):
+        asig_id = self._materia_grupo_seleccionada_id
+        prof_id = self._profesor_id_seleccionado
+
+        asig_info = self._materias_grupo_cache.get(str(asig_id)) if asig_id else None
+
+        if asig_info:
+            p_actual = asig_info.get("profesor_nombre", "Sin profesor")
+            tiene_prof = (asig_info.get("profesor_id") and asig_info.get("profesor_id") != 'SIN_ASIGNAR')
+            if hasattr(self, '_btn_desvincular_profesor'):
+                self._btn_desvincular_profesor.config(state='normal' if tiene_prof else 'disabled')
+
+            if prof_id:
+                prof_info = self.profesores_map.get(str(prof_id), {})
+                p_nombre_sel = prof_info.get("nombre", prof_id)
+                self._lbl_estado_vinculo.config(
+                    text=f"Materia: {asig_info['materia_nombre']} | Horario: {asig_info['hora_inicio']}-{asig_info['hora_fin']} [{asig_info['dias']}] (Aula: {asig_info['salon_id']})\n"
+                         f"Docente a vincular: {p_nombre_sel}",
+                    foreground='#98FB98'
+                )
+                if hasattr(self, '_btn_vincular_profesor'):
+                    self._btn_vincular_profesor.config(state='normal')
+            else:
+                self._lbl_estado_vinculo.config(
+                    text=f"Materia seleccionada: {asig_info['materia_nombre']} ({p_actual}). Selecciona un profesor de la tabla derecha.",
+                    foreground='#FFD700'
+                )
+                if hasattr(self, '_btn_vincular_profesor'):
+                    self._btn_vincular_profesor.config(state='disabled')
+        else:
+            if hasattr(self, '_btn_vincular_profesor'):
+                self._btn_vincular_profesor.config(state='disabled')
+            if hasattr(self, '_btn_desvincular_profesor'):
+                self._btn_desvincular_profesor.config(state='disabled')
+            self._lbl_estado_vinculo.config(
+                text="Selecciona una materia preasignada arriba y un profesor a la derecha para vincular.",
+                foreground='#7E8B9B'
+            )
+
+    def _desvincular_docente_materia(self):
+        asig_id = self._materia_grupo_seleccionada_id
+        if not asig_id:
+            return
+        asig_info = self._materias_grupo_cache.get(str(asig_id))
+        if not asig_info:
+            return
+
+        if not messagebox.askyesno(
+            "Confirmar Desvinculación",
+            f"¿Desea desvincular al docente de la materia '{asig_info['materia_nombre']}'?\n"
+            f"La materia conservará su aula y horario preasignados y volverá al estado 'Sin profesor'."
+        ):
+            return
+
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return
+            cur, conn = ctx
+            try:
+                cur.execute("""
+                    UPDATE asignaciones
+                    SET profesor_id = 'SIN_ASIGNAR', estado = 'no asignado'
+                    WHERE asignacion_id = %s
+                """, (asig_id,))
+                conn.commit()
+            except sqlite3.Error as err:
+                conn.rollback()
+                messagebox.showerror("Error", f"No se pudo desvincular: {err}")
+                return
+
+        self._cargar_materias_grupo_gestion()
+        self.actualizar_vista_previa()
+        self._cargar_previa_horario_grupo()
+        self._cargar_tensor_diferido(forzar=True)
+        messagebox.showinfo("Éxito", "Docente desvinculado. La materia ahora se muestra como 'Sin profesor'.")
+
+    def _ejecutar_vinculacion_docente(self):
+        asig_id = self._materia_grupo_seleccionada_id
+        prof_id = self._profesor_id_seleccionado
+
+        if not asig_id or not prof_id:
+            messagebox.showwarning("Aviso", "Selecciona una materia del grupo y un profesor para vincular.")
+            return
+
+        asig_info = self._materias_grupo_cache.get(str(asig_id))
+        if not asig_info:
+            messagebox.showerror("Error", "No se encontró la información de la materia preasignada.")
+            return
+
+        prof_info = self.profesores_map.get(str(prof_id), {})
+        prof_nombre = prof_info.get("nombre", prof_id)
+        materia_id = asig_info['materia_id']
+        materia_nombre = asig_info['materia_nombre']
+        grupo_id = self._sv_grupo_gestion.get().strip()
+        hora_i = asig_info['hora_inicio']
+        hora_f = asig_info['hora_fin']
+        dias_str = asig_info['dias']
+        dias_lista = [d.strip() for d in dias_str.split(',') if d.strip()]
+
+        # 1. Comprobar si el profesor ya tiene esa misma asignación
+        if asig_info.get('profesor_id') == prof_id:
+            messagebox.showinfo("Información", f"El profesor '{prof_nombre}' ya está asignado a esta materia.")
+            return
+
+        # 2. Comprobar choques de horario del profesor
+        choques_profesor = []
+        try:
+            choques_profesor = self._detectar_choques_profesor(
+                prof_id, materia_id, grupo_id, 'Presencial', dias_lista, hora_i, hora_f
+            )
+        except Exception as err:
+            print(f"Error comprobando choques del profesor: {err}")
+
+        # 3. Comprobar disponibilidad registrada del profesor (si tiene horarios registrados)
+        disp_choque = False
+        disp_detalle = ""
+        with obtener_cursor() as ctx:
+            if ctx:
+                cur, conn = ctx
+                cur.execute(
+                    "SELECT dia, hora_inicio, hora_fin FROM profesor_disponibilidad WHERE profesor_id = %s",
+                    (prof_id,)
+                )
+                disp_rows = cur.fetchall()
+                if disp_rows:
+                    # El profesor tiene franjas restringidas. Verificar si el horario cae dentro de alguna.
+                    ini_min = self._minutos_hora_previa(hora_i)
+                    fin_min = self._minutos_hora_previa(hora_f)
+                    dias_indices = [self._dia_a_indice_previa(d) for d in dias_lista if self._dia_a_indice_previa(d) is not None]
+
+                    cubiertos = set()
+                    for d_idx in dias_indices:
+                        for row_dia, row_hi, row_hf in disp_rows:
+                            r_d_idx = self._dia_a_indice_previa(row_dia)
+                            r_ini = self._minutos_hora_previa(row_hi)
+                            r_fin = self._minutos_hora_previa(row_hf)
+                            if r_d_idx == d_idx and r_ini is not None and r_fin is not None:
+                                if r_ini <= ini_min and fin_min <= r_fin:
+                                    cubiertos.add(d_idx)
+                                    break
+                    if len(cubiertos) < len(dias_indices):
+                        disp_choque = True
+                        disp_detalle = f"El horario preasignado ({hora_i} - {hora_f} en {dias_str}) excede o no coincide con los periodos de disponibilidad registrados del profesor."
+
+        # Si hay choques con otra clase o con su disponibilidad, abrir modal de 4 opciones
+        if choques_profesor or disp_choque:
+            self._mostrar_modal_resolucion_conflicto(
+                asig_info=asig_info,
+                prof_id=prof_id,
+                prof_nombre=prof_nombre,
+                choques=choques_profesor,
+                motivo_disp=disp_detalle
+            )
+            return
+
+        # Sin conflicto: proceder con la asignación directa
+        self._aplicar_vinculacion_docente(asig_id, prof_id, estado='asignado')
+
+    def _aplicar_vinculacion_docente(self, asig_id, prof_id, estado='asignado'):
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return False
+            cur, conn = ctx
+            try:
+                cur.execute("""
+                    UPDATE asignaciones
+                    SET profesor_id = %s, estado = %s
+                    WHERE asignacion_id = %s
+                """, (prof_id, estado, asig_id))
+                conn.commit()
+            except sqlite3.Error as err:
+                conn.rollback()
+                messagebox.showerror("Error BD", f"Error al vincular docente: {err}")
+                return False
+
+        self._cargar_materias_grupo_gestion()
+        self.actualizar_vista_previa()
+        self._cargar_previa_horario_grupo()
+        self._cargar_tensor_diferido(forzar=True)
+        messagebox.showinfo("Éxito", "Profesor vinculado correctamente a la materia preasignada.")
+        return True
+
+    def _mostrar_modal_resolucion_conflicto(self, asig_info, prof_id, prof_nombre, choques, motivo_disp=""):
+        dialogo = tk.Toplevel(self.ventana)
+        dialogo.title("Conflicto de Horario / Disponibilidad")
+        dialogo.transient(self.ventana)
+        dialogo.grab_set()
+        dialogo.configure(background='#0A0F1E')
+        dialogo.geometry("640x520")
+
+        f_cont = ttk.Frame(dialogo, style='blue.TFrame')
+        f_cont.pack(fill='both', expand=True, padx=16, pady=14)
+
+        ttk.Label(
+            f_cont,
+            text="⚠ CONFLICTO DETECTADO AL ASIGNAR PROFESOR",
+            background='#0A0F1E',
+            foreground='#FF6B6B',
+            font=self._fuente_titulo
+        ).pack(anchor='w', pady=(0, 6))
+
+        materia_txt = f"{asig_info['materia_id']} - {asig_info['materia_nombre']}"
+        horario_txt = f"{asig_info['hora_inicio']} - {asig_info['hora_fin']} [{asig_info['dias']}] en Aula {asig_info['salon_id']}"
+        detalles_txt = f"• Materia a vincular: {materia_txt}\n• Horario preasignado: {horario_txt}\n• Profesor seleccionado: {prof_nombre}\n\n"
+
+        if choques:
+            detalles_txt += "Cruce con otra(s) clase(s) del profesor:\n"
+            for ch in choques:
+                detalles_txt += f"  - {ch['dia']} ({ch['inicio']} - {ch['fin']}): {ch['materia']} (Grupo: {ch['grupo']})\n"
+        if motivo_disp:
+            detalles_txt += f"\nDisponibilidad:\n  - {motivo_disp}\n"
+
+        txt_widget = tk.Text(f_cont, height=7, font=("Consolas", 10), bg='#111827', fg='#E5E7EB', relief='flat', bd=2)
+        txt_widget.insert('1.0', detalles_txt)
+        txt_widget.config(state='disabled')
+        txt_widget.pack(fill='x', pady=6)
+
+        ttk.Label(
+            f_cont,
+            text="Selecciona una opción para resolver este conflicto:",
+            background='#0A0F1E',
+            foreground='#FFD700',
+            font=self._fuente_sub
+        ).pack(anchor='w', pady=(8, 4))
+
+        opcion_var = tk.StringVar(value="imponer")
+
+        rb1 = ttk.Radiobutton(
+            f_cont,
+            text="1. Intercambiar profesor (Intercambiar con el docente de la otra clase en conflicto)",
+            variable=opcion_var,
+            value="intercambiar"
+        )
+        rb1.pack(anchor='w', pady=3)
+
+        rb2 = ttk.Radiobutton(
+            f_cont,
+            text="2. Cancelar asignación (No realizar cambios y mantener sin profesor)",
+            variable=opcion_var,
+            value="cancelar"
+        )
+        rb2.pack(anchor='w', pady=3)
+
+        rb3 = ttk.Radiobutton(
+            f_cont,
+            text="3. Imponer como pendiente (Asignar al profesor conservando el horario y marcar 'pendiente')",
+            variable=opcion_var,
+            value="imponer"
+        )
+        rb3.pack(anchor='w', pady=3)
+
+        rb4 = ttk.Radiobutton(
+            f_cont,
+            text="4. Reubicar automáticamente (Buscar un aula u horario alternativo sin conflicto)",
+            variable=opcion_var,
+            value="reubicar"
+        )
+        rb4.pack(anchor='w', pady=3)
+
+        f_btns = ttk.Frame(f_cont, style='blue.TFrame')
+        f_btns.pack(fill='x', pady=(16, 0))
+
+        def ejecutar_resolucion():
+            eleccion = opcion_var.get()
+            dialogo.destroy()
+
+            if eleccion == "cancelar":
+                messagebox.showinfo("Cancelado", "Asignación cancelada. No se realizaron cambios.")
+                return
+
+            elif eleccion == "imponer":
+                self._aplicar_vinculacion_docente(asig_info['asignacion_id'], prof_id, estado='pendiente')
+
+            elif eleccion == "intercambiar":
+                self._ejecutar_intercambio_profesor(asig_info, prof_id, prof_nombre, choques)
+
+            elif eleccion == "reubicar":
+                self._ejecutar_reubicacion_automatica(asig_info, prof_id, prof_nombre)
+
+        ttk.Button(f_btns, text="Confirmar y Aplicar", command=ejecutar_resolucion).pack(side='right', padx=4)
+        ttk.Button(f_btns, text="Cerrar", command=dialogo.destroy).pack(side='right', padx=4)
+
+    def _ejecutar_intercambio_profesor(self, asig_info, prof_id, prof_nombre, choques):
+        """
+        Intercambia profesores:
+        Asigna el prof_id a la materia actual, y si la materia actual tenía otro profesor,
+        se intercambia con la clase en conflicto.
+        """
+        asig_id_actual = asig_info['asignacion_id']
+        prof_id_anterior = asig_info.get('profesor_id')
+
+        asig_conflicto_id = None
+        if choques:
+            # Buscar el asignacion_id de la clase en conflicto
+            with obtener_cursor() as ctx:
+                if ctx:
+                    cur, conn = ctx
+                    ch = choques[0]
+                    cur.execute("""
+                        SELECT a.asignacion_id FROM asignaciones a
+                        JOIN materias m ON a.materia_id = m.materia_id
+                        WHERE a.profesor_id = %s AND a.grupo_id = %s AND m.nombre = %s
+                        LIMIT 1
+                    """, (prof_id, ch['grupo'], ch['materia']))
+                    row = cur.fetchone()
+                    if row:
+                        asig_conflicto_id = row[0]
+
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return
+            cur, conn = ctx
+            try:
+                # Asignar prof_id a la materia actual
+                cur.execute("UPDATE asignaciones SET profesor_id = %s, estado = 'asignado' WHERE asignacion_id = %s",
+                            (prof_id, asig_id_actual))
+
+                if asig_conflicto_id:
+                    # El profesor anterior toma la clase que tenía el profesor_id
+                    nuevo_profe_para_conflicto = prof_id_anterior if (prof_id_anterior and prof_id_anterior != 'SIN_ASIGNAR') else 'SIN_ASIGNAR'
+                    cur.execute("UPDATE asignaciones SET profesor_id = %s, estado = %s WHERE asignacion_id = %s",
+                                (nuevo_profe_para_conflicto, 'asignado' if nuevo_profe_para_conflicto != 'SIN_ASIGNAR' else 'no asignado', asig_conflicto_id))
+
+                conn.commit()
+            except sqlite3.Error as err:
+                conn.rollback()
+                messagebox.showerror("Error", f"Error realizando intercambio: {err}")
+                return
+
+        self._cargar_materias_grupo_gestion()
+        self.actualizar_vista_previa()
+        self._cargar_previa_horario_grupo()
+        self._cargar_tensor_diferido(forzar=True)
+        messagebox.showinfo("Intercambio Realizado", "Se ha realizado el intercambio de profesores exitosamente.")
+
+    def _ejecutar_reubicacion_automatica(self, asig_info, prof_id, prof_nombre):
+        """
+        Busca otro bloque libre para esta materia y aula o profesor que no tenga choques.
+        """
+        asig_id = asig_info['asignacion_id']
+        grupo_id = self._sv_grupo_gestion.get().strip()
+        materia_id = asig_info['materia_id']
+        salon_id = asig_info['salon_id'].split(',')[0].strip() if asig_info.get('salon_id') else 'Normal'
+
+        dias_alternativos = [("Lunes", "Miércoles"), ("Martes", "Jueves"), ("Miércoles", "Viernes")]
+        horas_alternativas = [
+            ("07:00", "09:00"), ("09:00", "11:00"), ("11:00", "13:00"),
+            ("13:00", "15:00"), ("15:00", "17:00"), ("17:00", "19:00")
+        ]
+
+        encontrado = None
+        for pareja in dias_alternativos:
+            dias_str = ", ".join(pareja)
+            for hi, hf in horas_alternativas:
+                # Comprobar choques con grupo
+                choques_g = self._detectar_choques_grupo(grupo_id, materia_id, list(pareja), hi, hf)
+                if choques_g:
+                    continue
+                # Comprobar choques con profesor
+                choques_p = self._detectar_choques_profesor(prof_id, materia_id, grupo_id, 'Presencial', list(pareja), hi, hf)
+                if choques_p:
+                    continue
+
+                encontrado = (pareja, hi, hf)
+                break
+            if encontrado:
+                break
+
+        if not encontrado:
+            # Si no encuentra espacio idéntico, asigna con estado pendiente
+            self._aplicar_vinculacion_docente(asig_id, prof_id, estado='pendiente')
+            messagebox.showwarning(
+                "Reubicación Compleja",
+                "No se encontró un bloque automático libre sin choques.\n"
+                "La asignación se guardó como 'PENDIENTE' para que se ajuste manualmente."
+            )
+            return
+
+        pareja, hi, hf = encontrado
+        dias_str = ", ".join(pareja)
+
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return
+            cur, conn = ctx
+            try:
+                # Actualizar asignación
+                cur.execute("""
+                    UPDATE asignaciones
+                    SET profesor_id = %s, hora_inicio = %s, hora_fin = %s, dias = %s, estado = 'asignado'
+                    WHERE asignacion_id = %s
+                """, (prof_id, hi, hf, dias_str, asig_id))
+
+                # Actualizar sesiones en horarios
+                cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (asig_id,))
+                for d in pareja:
+                    cur.execute("""
+                        INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (asig_id, salon_id if salon_id != "Sin aula" else "F10", d, f"{hi}:00", f"{hf}:00"))
+
+                conn.commit()
+            except sqlite3.Error as err:
+                conn.rollback()
+                messagebox.showerror("Error", f"Error al reubicar: {err}")
+                return
+
+        self._cargar_materias_grupo_gestion()
+        self.actualizar_vista_previa()
+        self._cargar_previa_horario_grupo()
+        self._cargar_tensor_diferido(forzar=True)
+        messagebox.showinfo(
+            "Reubicación Exitosa",
+            f"La materia fue reubicada automáticamente sin conflictos:\n\n"
+            f"• Días: {dias_str}\n"
+            f"• Horario: {hi} a {hf}\n"
+            f"• Profesor: {prof_nombre}"
+        )
+
     def _cargar_profesor_desde_tabla(self, event):
         item = self.tabla_profesores.focus()
         if not item:
@@ -563,11 +1140,19 @@ class VentanaGestion:
         self.entry_nombre_prof.delete(0, tk.END)
         self.entry_nombre_prof.insert(0, nombre)
         self.entry_nombre_prof.config(state='readonly')
+
+        if hasattr(self, 'entry_prof_vinculo'):
+            self.entry_prof_vinculo.config(state='normal')
+            self.entry_prof_vinculo.delete(0, tk.END)
+            self.entry_prof_vinculo.insert(0, f"{no_cuenta} - {nombre}")
+            self.entry_prof_vinculo.config(state='readonly')
+
         for pid, info in self.profesores_map.items():
             if info["no_cuenta"] == no_cuenta:
                 self._profesor_id_seleccionado = pid
                 break
         self._actualizar_horas_info()
+        self._actualizar_estado_boton_vinculo()
         for item in self._periodos_frame.winfo_children():
             item.destroy()
         self._periodos_asignacion.clear()
@@ -815,8 +1400,13 @@ class VentanaGestion:
         self.entry_nombre_prof.config(state='normal')
         self.entry_nombre_prof.delete(0, tk.END)
         self.entry_nombre_prof.config(state='readonly')
+        if hasattr(self, 'entry_prof_vinculo'):
+            self.entry_prof_vinculo.config(state='normal')
+            self.entry_prof_vinculo.delete(0, tk.END)
+            self.entry_prof_vinculo.config(state='readonly')
         self._profesor_id_seleccionado = None
         self._label_horas.config(text="")
+        self._actualizar_estado_boton_vinculo()
         for item in self._periodos_frame.winfo_children():
             item.destroy()
         self._periodos_asignacion.clear()
@@ -2188,6 +2778,17 @@ class VentanaGestion:
                 if not self.combo_periodos.get() and self.combo_periodos['values']:
                     self.combo_periodos.set(self.combo_periodos['values'][0])
                     self._cambiar_filtro_periodo()
+                if hasattr(self, 'combo_grupo_gestion'):
+                    todos_grupos_lista = []
+                    for s in sorted(self.grupos_por_semestre.keys(), key=lambda x: int(x) if str(x).isdigit() else 99):
+                        for g in self.grupos_por_semestre[s]:
+                            if g not in todos_grupos_lista:
+                                todos_grupos_lista.append(g)
+                    self.combo_grupo_gestion['values'] = todos_grupos_lista
+                    if todos_grupos_lista and not self.combo_grupo_gestion.get():
+                        self.combo_grupo_gestion.set(todos_grupos_lista[0])
+                        self._cargar_materias_grupo_gestion()
+
                 self._actualizar_grupos_en_periodos()
             except sqlite3.Error as err:
                 conn.rollback()
