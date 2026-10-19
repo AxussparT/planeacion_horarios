@@ -97,6 +97,11 @@ class VentanaGestion:
         _migrar_bd()
         _backfill_dias()
 
+        self._fuente_titulo = font.Font(family="Roboto", size=18, weight="bold")
+        self._fuente_sub = font.Font(family="Roboto", size=12)
+        self._fuente_label = font.Font(family="Roboto", size=10)
+        self._fuente_btn = font.Font(family="Roboto", size=10, weight="bold")
+
         estilo = ttk.Style()
         estilo.configure('blue.TFrame', background='#0A0F1E')
         estilo.configure('TNotebook', background='#0A0F1E', borderwidth=0)
@@ -107,7 +112,6 @@ class VentanaGestion:
             background=[('active', '#ffffff'), ('focus', '#ffffff'), ('pressed', '#ffffff')],
             foreground=[('active', '#000000'), ('focus', '#000000'), ('pressed', '#000000')]
         )
-
 
         self.profesores_map = {}
         self.materias_map = {}
@@ -136,11 +140,6 @@ class VentanaGestion:
         self._disponibilidad_profesores = {}
         self._materia_grupo_seleccionada_id = None
         self._materias_grupo_cache = {}
-        
-        self._fuente_titulo = font.Font(family="Roboto", size=18, weight="bold")
-        self._fuente_sub = font.Font(family="Roboto", size=12)
-        self._fuente_label = font.Font(family="Roboto", size=10)
-        self._fuente_btn = font.Font(family="Roboto", size=10, weight="bold")
         
         self.grupos_por_semestre = self._cargar_grupos_desde_bd()
 
