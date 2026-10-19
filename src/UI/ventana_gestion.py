@@ -1133,6 +1133,261 @@ class VentanaGestion:
         self._cargar_tensor_diferido(forzar=True)
         messagebox.showinfo("Éxito", "Docente desvinculado. La materia ahora se muestra como 'Sin profesor'.")
 
+    def _detectar_compactacion_docente(self, prof_id, asig_id, materia_id, grupo_id, modalidad, aula_actual):
+        """
+        Detecta si el docente ya tiene otras clases asignadas y busca acomodar la nueva materia
+        en los MISMOS días que sus clases existentes, en horario corrido (contiguo),
+        para compactar su jornada a la menor cantidad de días posibles (ej. concentrar en 2 días).
+        """
+        if not prof_id or prof_id == 'SIN_ASIGNAR':
+            return None
+
+        # 1. Consultar asignaciones activas existentes del profesor
+        with obtener_cursor_dict() as ctx:
+            if not ctx:
+                return None
+            cur, conn = ctx
+            cur.execute("""
+                SELECT a.asignacion_id, a.materia_id, IFNULL(m.nombre, a.materia_id) as materia_nombre,
+                       a.grupo_id, h.dia, h.hora_inicio, h.hora_fin, h.salon_id
+                FROM asignaciones a
+                JOIN materias m ON a.materia_id = m.materia_id
+                JOIN horarios h ON a.asignacion_id = h.asignacion_id
+                WHERE a.profesor_id = %s
+                  AND (a.estado IS NULL OR a.estado != 'cancelada')
+                  AND a.asignacion_id != %s
+                ORDER BY h.dia, h.hora_inicio
+            """, (prof_id, asig_id or -1))
+            clases_existentes = cur.fetchall()
+
+        if not clases_existentes:
+            return None
+
+        # 2. Extraer los días en los que el profesor ya imparte clase
+        dias_prof = {}
+        for c in clases_existentes:
+            d_norm = self._normalizar_dia(c['dia'])
+            d_nombre = getattr(self, 'MAPA_DIAS', {}).get(d_norm, c['dia'])
+            if d_nombre not in dias_prof:
+                dias_prof[d_nombre] = []
+            ini_m = self._minutos_hora_previa(c['hora_inicio'])
+            fin_m = self._minutos_hora_previa(c['hora_fin'])
+            if ini_m is not None and fin_m is not None:
+                dias_prof[d_nombre].append({
+                    "ini": ini_m,
+                    "fin": fin_m,
+                    "hi": self._hora_db_a_str(c['hora_inicio']),
+                    "hf": self._hora_db_a_str(c['hora_fin']),
+                    "materia": c['materia_nombre'],
+                    "grupo": c['grupo_id'],
+                    "aula": c['salon_id']
+                })
+
+        dias_unicos = list(dias_prof.keys())
+        parejas_posibles = [
+            ["Lunes", "Miércoles"],
+            ["Martes", "Jueves"],
+            ["Miércoles", "Viernes"],
+            ["Viernes", "Sábado"],
+            ["Lunes", "Viernes"]
+        ]
+
+        dias_objetivo = None
+        for p in parejas_posibles:
+            if any(d in dias_prof for d in p):
+                dias_objetivo = p
+                break
+        if not dias_objetivo:
+            dias_objetivo = dias_unicos[:2] if len(dias_unicos) >= 2 else dias_unicos
+
+        min_hora = 24 * 60
+        max_hora = 0
+        horas_ocupadas_prof = []
+        for d in dias_objetivo:
+            for c in dias_prof.get(d, []):
+                min_hora = min(min_hora, c['ini'])
+                max_hora = max(max_hora, c['fin'])
+                horas_ocupadas_prof.append((c['ini'], c['fin']))
+
+        if not horas_ocupadas_prof:
+            return None
+
+        h_req = self._get_horas_materia(materia_id)
+        if h_req and len(dias_objetivo) > 0:
+            duracion_min = int((h_req / len(dias_objetivo)) * 60)
+        else:
+            duracion_min = 120
+
+        franjas_candidatas = []
+        # Prioridad 1: Corrida posterior a la última clase del profesor
+        if max_hora + duracion_min <= 17 * 60:
+            franjas_candidatas.append((max_hora, max_hora + duracion_min, True))
+
+        # Prioridad 2: Corrida anterior a la primera clase del profesor
+        if min_hora - duracion_min >= 7 * 60:
+            franjas_candidatas.append((min_hora - duracion_min, min_hora, True))
+
+        # Prioridad 3: Otras franjas del mismo bloque de días antes de 17:00
+        for h_ini in range(7 * 60, 17 * 60 - duracion_min + 1, 60):
+            h_fin = h_ini + duracion_min
+            if not any(f[0] == h_ini and f[1] == h_fin for f in franjas_candidatas):
+                franjas_candidatas.append((h_ini, h_fin, False))
+
+        aulas_candidatas = []
+        if aula_actual and aula_actual not in ("Sin aula", ""):
+            aulas_candidatas.append(aula_actual)
+        with obtener_cursor() as ctx_a:
+            if ctx_a:
+                cur_a, _ = ctx_a
+                cur_a.execute("SELECT salon_id FROM salones WHERE salon_id NOT LIKE 'MEDIACION%' ORDER BY salon_id")
+                for r in cur_a.fetchall():
+                    if r[0] not in aulas_candidatas:
+                        aulas_candidatas.append(r[0])
+
+        for h_ini, h_fin, es_continua in franjas_candidatas:
+            hi_str = f"{h_ini // 60:02d}:{h_ini % 60:02d}"
+            hf_str = f"{h_fin // 60:02d}:{h_fin % 60:02d}"
+
+            ch_prof = self._detectar_choques_profesor(
+                prof_id, materia_id, grupo_id, modalidad, dias_objetivo, hi_str, hf_str, excluir_asignacion_id=asig_id
+            )
+            if ch_prof:
+                continue
+
+            disp_ch, _ = self._validar_disponibilidad_profesor(prof_id, dias_objetivo, hi_str, hf_str)
+            if disp_ch:
+                continue
+
+            ch_grupo = self._detectar_choques_grupo(
+                grupo_id, materia_id, dias_objetivo, hi_str, hf_str, excluir_asignacion_id=asig_id
+            )
+            if ch_grupo:
+                continue
+
+            aula_elegida = None
+            for s_id in aulas_candidatas:
+                ch_aula = self._detectar_choques_aula(s_id, asig_id, dias_objetivo, hi_str, hf_str)
+                if not ch_aula:
+                    aula_elegida = s_id
+                    break
+
+            if not aula_elegida:
+                continue
+
+            resumen_existentes = []
+            for d in dias_objetivo:
+                for c in dias_prof.get(d, []):
+                    resumen_existentes.append(f"• {d} {c['hi']}-{c['hf']}: {c['materia']} (Grupo {c['grupo']}) en Aula {c['aula']}")
+
+            return {
+                "encontrado": True,
+                "dias": dias_objetivo,
+                "dias_str": ", ".join(dias_objetivo),
+                "hora_i": hi_str,
+                "hora_f": hf_str,
+                "salon": aula_elegida,
+                "es_continua": es_continua,
+                "clases_actuales": resumen_existentes
+            }
+
+        return None
+
+    def _mostrar_dialogo_sugerencia_compactacion(self, asig_info, prof_nombre, compactacion):
+        """
+        Diálogo interactivo para sugerir la compactación de la carga del docente en la menor
+        cantidad de días posible con clases corridas (contiguas).
+        Retorna True si el usuario acepta, False si prefiere mantener el original, None si cancela.
+        """
+        resultado = [False]
+
+        dialogo = tk.Toplevel(self.ventana)
+        dialogo.title("Optimización de Jornada Docente")
+        dialogo.transient(self.ventana)
+        dialogo.grab_set()
+        dialogo.configure(background='#0A0F1E')
+        dialogo.geometry("620x470")
+        dialogo.resizable(False, False)
+
+        f_cont = ttk.Frame(dialogo, style='blue.TFrame')
+        f_cont.pack(fill='both', expand=True, padx=18, pady=16)
+
+        ttk.Label(
+            f_cont,
+            text="⚡ Sugerencia: Compactación Continua de Jornada",
+            background='#0A0F1E',
+            foreground='#FFD700',
+            font=self._fuente_titulo
+        ).pack(anchor='w', pady=(0, 4))
+
+        ttk.Label(
+            f_cont,
+            text=f"El profesor {prof_nombre} ya cuenta con clases asignadas. El motor detectó una oportunidad para concentrar su asistencia en 2 días con clases corridas (sin tiempos muertos):",
+            background='#0A0F1E',
+            foreground='#CFD8DC',
+            font=self._fuente_label,
+            wraplength=580,
+            justify='left'
+        ).pack(anchor='w', pady=(0, 8))
+
+        f_exist = ttk.LabelFrame(f_cont, text="Clases ya asignadas a este profesor", style='blue.TFrame')
+        f_exist.pack(fill='x', pady=4)
+        txt_exist = "\n".join(compactacion['clases_actuales'][:4])
+        ttk.Label(
+            f_exist,
+            text=txt_exist,
+            background='#0A0F1E',
+            foreground='#90CAF9',
+            font=self._fuente_label,
+            justify='left'
+        ).pack(anchor='w', padx=10, pady=6)
+
+        f_prop = ttk.LabelFrame(f_cont, text="Comparativa de Asignación", style='blue.TFrame')
+        f_prop.pack(fill='x', pady=6)
+
+        h_act = f"{asig_info.get('hora_inicio')} a {asig_info.get('hora_fin')} [{asig_info.get('dias')}] en Aula {asig_info.get('salon_id')}"
+        tipo_continua = " (Clase corrida contigua)" if compactacion.get('es_continua') else " (Mismos días)"
+        h_sug = f"{compactacion['hora_i']} a {compactacion['hora_f']} [{compactacion['dias_str']}] en Aula {compactacion['salon']}{tipo_continua}"
+
+        f_grid = ttk.Frame(f_prop, style='blue.TFrame')
+        f_grid.pack(fill='x', padx=8, pady=6)
+
+        ttk.Label(f_grid, text="Horario Preasignado:", background='#0A0F1E', foreground='#B0BEC5', font=self._fuente_sub).grid(row=0, column=0, sticky='w', pady=2)
+        ttk.Label(f_grid, text=h_act, background='#0A0F1E', foreground='#FFAB91', font=self._fuente_label).grid(row=0, column=1, sticky='w', padx=8, pady=2)
+
+        ttk.Label(f_grid, text="Propuesta Compactada:", background='#0A0F1E', foreground='#B0BEC5', font=self._fuente_sub).grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Label(f_grid, text=h_sug, background='#0A0F1E', foreground='#A5D6A7', font=self._fuente_btn).grid(row=1, column=1, sticky='w', padx=8, pady=2)
+
+        ttk.Label(
+            f_cont,
+            text="✔ Concentra la asistencia del profesor en 2 días.\n✔ Clases corridas sin horas libres intermedias.\n✔ Verificado: Sin conflicto de aula ni de grupo.",
+            background='#0A0F1E',
+            foreground='#81C784',
+            font=self._fuente_label,
+            justify='left'
+        ).pack(anchor='w', pady=4)
+
+        f_btns = ttk.Frame(f_cont, style='blue.TFrame')
+        f_btns.pack(fill='x', side='bottom', pady=(10, 0))
+
+        def _aceptar():
+            resultado[0] = True
+            dialogo.destroy()
+
+        def _conservar():
+            resultado[0] = False
+            dialogo.destroy()
+
+        def _cancelar():
+            resultado[0] = None
+            dialogo.destroy()
+
+        ttk.Button(f_btns, text="Cancelar", command=_cancelar).pack(side='right', padx=4)
+        ttk.Button(f_btns, text="Mantener Horario Original", command=_conservar).pack(side='right', padx=4)
+        ttk.Button(f_btns, text="⚡ Sí, Compactar Horario", command=_aceptar).pack(side='right', padx=4)
+
+        dialogo.wait_window()
+        return resultado[0]
+
     def _ejecutar_vinculacion_docente(self):
         asig_id = self._materia_grupo_seleccionada_id
         prof_id = self._profesor_id_seleccionado
@@ -1205,6 +1460,46 @@ class VentanaGestion:
             dias_str = asig_info['dias']
             dias_lista = [d.strip() for d in dias_str.split(',') if d.strip()]
             aula_sel = asig_info.get('salon_id', 'Sin aula')
+
+            # --- Detección y Sugerencia de Compactación Continua Docente ---
+            compactacion = self._detectar_compactacion_docente(
+                prof_id=prof_id,
+                asig_id=asig_id,
+                materia_id=materia_id,
+                grupo_id=grupo_id,
+                modalidad=modalidad,
+                aula_actual=aula_sel
+            )
+            if compactacion and compactacion.get("encontrado"):
+                dias_asig_norm = [self._dia_a_indice_previa(d) for d in dias_lista]
+                dias_comp_norm = [self._dia_a_indice_previa(d) for d in compactacion['dias']]
+                mismo_horario = (
+                    dias_asig_norm == dias_comp_norm and
+                    compactacion['hora_i'] == self._hora_db_a_str(hora_i) and
+                    compactacion['hora_f'] == self._hora_db_a_str(hora_f)
+                )
+                if not mismo_horario:
+                    resp_comp = self._mostrar_dialogo_sugerencia_compactacion(
+                        asig_info=asig_info,
+                        prof_nombre=prof_nombre,
+                        compactacion=compactacion
+                    )
+                    if resp_comp is None:
+                        # Cancelar vinculación
+                        return
+                    elif resp_comp is True:
+                        # Aplicar compactación sugerida directamente
+                        hora_i = compactacion['hora_i']
+                        hora_f = compactacion['hora_f']
+                        dias_lista = compactacion['dias']
+                        dias_str = compactacion['dias_str']
+                        aula_sel = compactacion['salon']
+                        self._aplicar_vinculacion_docente(
+                            asig_id, prof_id, estado='asignado', modalidad=modalidad,
+                            hora_i=hora_i, hora_f=hora_f, dias_str=dias_str, dias_lista=dias_lista,
+                            aula_sel=aula_sel
+                        )
+                        return
 
         # 1. Comprobar si el profesor ya tiene esa misma asignación
         if asig_info.get('profesor_id') == prof_id and asig_info.get('modalidad') == modalidad and not getattr(self, '_horario_manual_visible', False):
@@ -1450,26 +1745,40 @@ class VentanaGestion:
         dias_alternativos = [("Lunes", "Miércoles"), ("Martes", "Jueves"), ("Miércoles", "Viernes")]
         horas_alternativas = [
             ("07:00", "09:00"), ("09:00", "11:00"), ("11:00", "13:00"),
-            ("13:00", "15:00"), ("15:00", "17:00"), ("17:00", "19:00")
+            ("13:00", "15:00"), ("15:00", "17:00")
         ]
 
         encontrado = None
-        for pareja in dias_alternativos:
-            dias_str = ", ".join(pareja)
-            for hi, hf in horas_alternativas:
-                # Comprobar choques con grupo
-                choques_g = self._detectar_choques_grupo(grupo_id, materia_id, list(pareja), hi, hf)
-                if choques_g:
-                    continue
-                # Comprobar choques con profesor
-                choques_p = self._detectar_choques_profesor(prof_id, materia_id, grupo_id, 'Presencial', list(pareja), hi, hf)
-                if choques_p:
-                    continue
 
-                encontrado = (pareja, hi, hf)
-                break
-            if encontrado:
-                break
+        # Prioridad 1: Compactar en los mismos días del profesor con horario continuo
+        comp = self._detectar_compactacion_docente(
+            prof_id=prof_id,
+            asig_id=asig_id,
+            materia_id=materia_id,
+            grupo_id=grupo_id,
+            modalidad='Presencial',
+            aula_actual=salon_id
+        )
+        if comp and comp.get("encontrado"):
+            encontrado = (tuple(comp['dias']), comp['hora_i'], comp['hora_f'])
+            if comp.get('salon'):
+                salon_id = comp['salon']
+
+        # Prioridad 2: Buscar en parejas estándar si no se pudo compactar
+        if not encontrado:
+            for pareja in dias_alternativos:
+                dias_str = ", ".join(pareja)
+                for hi, hf in horas_alternativas:
+                    choques_g = self._detectar_choques_grupo(grupo_id, materia_id, list(pareja), hi, hf)
+                    if choques_g:
+                        continue
+                    choques_p = self._detectar_choques_profesor(prof_id, materia_id, grupo_id, 'Presencial', list(pareja), hi, hf)
+                    if choques_p:
+                        continue
+                    encontrado = (pareja, hi, hf)
+                    break
+                if encontrado:
+                    break
 
         if not encontrado:
             # Si no encuentra espacio idéntico, asigna con estado pendiente

@@ -363,22 +363,40 @@ class GeneradorHorarios:
         disponibilidad_ordenada = sorted(disponibilidad,
             key=lambda p: (0 if p['dia'] in dias_trabajados else 1, ORDEN_DIAS.get(p['dia'], 99)))
 
+        slots_prof_por_dia = {}
+        for (d, pid, s) in self.ocupacion_profesores:
+            if pid == prof_id:
+                slots_prof_por_dia.setdefault(d, set()).add(s)
+
         for p in disponibilidad_ordenada:
             dia = p['dia']
             p_ini = self._hora_a_slot(p['hora_inicio'])
             p_fin = self._hora_a_slot(p['hora_fin'])
+            # Acotar a las 17:00 hrs (slot 20 = 07:00 + 20*30m = 17:00)
+            p_fin = min(p_fin, 20)
+            slots_ocupados = slots_prof_por_dia.get(dia, set())
+
+            candidatos_dia = []
             for salon in salones:
                 for test_ini in range(p_ini, p_fin - duracion + 1):
                     test_fin = test_ini + duracion
                     if self.es_posible_asignar(asig, dia, test_ini, duracion, salon):
-                        alternativas.append({
+                        if slots_ocupados:
+                            dist = min(abs(test_ini - (s + 1)) if test_ini >= s else abs(s - test_fin) for s in slots_ocupados)
+                        else:
+                            dist = 999
+                        candidatos_dia.append((dist, {
                             "dia": dia,
                             "hora_inicio": self._slot_a_hora(test_ini)[:5],
                             "hora_fin": self._slot_a_hora(test_fin)[:5],
                             "salon": salon
-                        })
-                        if len(alternativas) >= 3:
-                            return alternativas
+                        }))
+
+            candidatos_dia.sort(key=lambda x: x[0])
+            for _dist, alt in candidatos_dia:
+                alternativas.append(alt)
+                if len(alternativas) >= 3:
+                    return alternativas
         return alternativas[:3]
 
     def _crear_alerta_conflicto(self, asigs_en_conflicto, alternativas):
