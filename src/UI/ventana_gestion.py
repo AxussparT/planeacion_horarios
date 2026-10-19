@@ -2755,7 +2755,11 @@ class VentanaGestion:
                 sql = """
                     SELECT 
                         a.asignacion_id,
-                        a.profesor_id, IFNULL(p.nombre, 'Sin Profesor'), 
+                        a.profesor_id,
+                        CASE 
+                            WHEN a.profesor_id IS NULL OR a.profesor_id = 'SIN_ASIGNAR' THEN 'Sin profesor asignado'
+                            ELSE IFNULL(p.nombre, 'Sin profesor asignado')
+                        END AS profesor_nombre,
                         a.materia_id, IFNULL(m.nombre, 'Materia Desconocida'),
                         a.grupo_id, IFNULL(g.grupo_id, 'Sin Grupo'),
                         IFNULL(a.estado, 'pendiente') AS estado
@@ -2799,7 +2803,12 @@ class VentanaGestion:
                 if resultados and tabla:
                     for row in resultados:
                         asig_id = row[0]
-                        p_str = f"{row[1]} - {row[2]}"
+                        prof_id_val = row[1]
+                        prof_nom_val = row[2]
+                        if not prof_id_val or prof_id_val == 'SIN_ASIGNAR':
+                            p_str = "Sin profesor asignado"
+                        else:
+                            p_str = f"{prof_id_val} - {prof_nom_val}"
                         m_str = f"{row[3]} - {row[4]} ({row[5]})"
                         estado_str = str(row[7]).upper()
                         tabla.insert('', 'end', iid=str(asig_id), values=(p_str, m_str, estado_str))
@@ -3573,8 +3582,16 @@ class VentanaGestion:
                     y_base_area = 1.0 - header_h
                     y_pos_materia = y_base_area - (r_ptr) * interval_h
                     
+                    es_sin_profesor = ("Sin profesor" in str(materia) or "SIN PROFESOR" in str(materia).upper())
+                    if es_sin_profesor:
+                        color_fondo = '#CBE5FE' if modo_impresion else '#1B4965'
+                        color_texto = '#002B49' if modo_impresion else '#FFFFFF'
+                    else:
+                        color_fondo = '#D4EDDA' if modo_impresion else '#2D6A4F'
+                        color_texto = '#155724' if modo_impresion else '#FFFFFF'
+
                     self.ax.add_patch(Rectangle((x_materia, y_pos_materia), col_widths[col_idx], h_bloque,
-                                              facecolor='white', edgecolor=edge_color, linewidth=1.2, zorder=3))
+                                              facecolor=color_fondo, edgecolor=edge_color, linewidth=1.2, zorder=3))
                     
                     lineas_originales = str(materia).split('\n')
                     lineas_ajustadas = []
@@ -3585,7 +3602,7 @@ class VentanaGestion:
                     
                     self.ax.text(x_materia + col_widths[col_idx]/2, y_pos_materia + h_bloque/2, texto_final,
                                ha='center', va='center', fontsize=6.5, fontweight='bold',
-                               color='black', zorder=4)
+                               color=color_texto, zorder=4)
                     
                 r_ptr += 1
             x_materia += col_widths[col_idx]

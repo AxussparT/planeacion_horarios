@@ -75,12 +75,15 @@ class MemoriaHorarioGrafico:
             query = """
                 SELECT h.horario_id, h.salon_id, h.dia, h.hora_inicio, h.hora_fin,
                        a.profesor_id, a.grupo_id, m.nombre AS materia,
-                       p.nombre AS profesor_nombre,
+                       CASE 
+                           WHEN a.profesor_id IS NULL OR a.profesor_id = 'SIN_ASIGNAR' THEN 'Sin profesor'
+                           ELSE IFNULL(p.nombre, 'Sin profesor')
+                       END AS profesor_nombre,
                        m.tipo AS materia_tipo, m.semestre_id AS materia_semestre
                 FROM horarios h
                 JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
                 JOIN materias m ON a.materia_id = m.materia_id
-                JOIN profesores p ON a.profesor_id = p.profesor_id
+                LEFT JOIN profesores p ON a.profesor_id = p.profesor_id
             """
             cursor.execute(query)
             horarios = cursor.fetchall()
@@ -93,7 +96,9 @@ class MemoriaHorarioGrafico:
                 }
             elif modo == "Profesor":
                 entidades_con_horario = {
-                    reg['profesor_id']: reg['profesor_nombre'] for reg in horarios
+                    reg['profesor_id']: reg['profesor_nombre']
+                    for reg in horarios
+                    if reg['profesor_id'] not in (None, 'SIN_ASIGNAR')
                 }
             elif modo == "Grupo":
                 cursor.execute("SELECT grupo_id AS id FROM grupos ORDER BY grupo_id")

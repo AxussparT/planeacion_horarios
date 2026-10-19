@@ -231,6 +231,7 @@ class VentanaPrincipal:
         f_btns_grupo.columnconfigure((0, 1), weight=1)
         ttk.Button(f_btns_grupo, text="Agregar Grupo", command=self.evento_grupos, style='Danger.TButton').grid(row=0, column=0, padx=4)
         ttk.Button(f_btns_grupo, text="Eliminar", command=self.eliminar_grupo, style='Danger.TButton').grid(row=0, column=1, padx=4)
+        ttk.Button(f_btns_grupo, text="Iniciar Preasignación", command=self.iniciar_preasignacion, style='Danger.TButton').grid(row=1, column=0, columnspan=2, padx=4, pady=(8, 0), sticky='ew')
 
         self.tab_gestion = ttk.Frame(self.notebook, style='blue.TFrame')
         self.notebook.add(self.tab_gestion, text='Gestión')
@@ -1435,6 +1436,53 @@ class VentanaPrincipal:
             return
         f = [g for g in self.cache_grupos if (t in str(g[0]).lower() or t in str(g[1]).lower()) and (s == "Todos" or str(g[1]) == s)]
         self.refrescar_tabla_grp(f)
+
+    def iniciar_preasignacion(self):
+        """
+        Ejecuta la preasignación automática de aulas y horarios para los grupos registrados (Paso 4).
+        """
+        if not messagebox.askyesno(
+            "Confirmar Preasignación",
+            "¿Desea iniciar la preasignación automática de aulas y horarios?\n\n"
+            "Esto asignará salones y horarios a las materias de cada grupo (sin profesor asignado) "
+            "optimizando el uso de aulas (2 grupos por aula estándar o hasta 3 si son reducidos).\n\n"
+            "¿Continuar?"
+        ):
+            return
+
+        from src.motor_preasignacion import GeneradorPreasignacion
+        generador = GeneradorPreasignacion()
+        resultado = generador.ejecutar()
+
+        if not resultado.get("exito"):
+            messagebox.showerror("Error en Preasignación", resultado.get("mensaje", "Ocurrió un error desconocido."))
+            return
+
+        self._refresh_all()
+
+        total_grupos = resultado.get("total_grupos", 0)
+        total_materias = resultado.get("materias_asignadas", 0)
+        total_horarios = resultado.get("horarios_generados", 0)
+        salones = resultado.get("salones_utilizados", [])
+        alertas = resultado.get("alertas", [])
+        resumen_grupos = resultado.get("resumen_grupos", [])
+
+        detalles = "\n".join(resumen_grupos[:10])
+        if len(resumen_grupos) > 10:
+            detalles += f"\n... y {len(resumen_grupos) - 10} grupos más."
+
+        msg = (
+            f"Preasignación completada exitosamente.\n\n"
+            f"• Grupos procesados: {total_grupos}\n"
+            f"• Materias preasignadas: {total_materias}\n"
+            f"• Bloques de horario: {total_horarios}\n"
+            f"• Aulas utilizadas: {', '.join(salones) if salones else 'Ninguna'}\n\n"
+            f"Distribución:\n{detalles}"
+        )
+        if alertas:
+            msg += f"\n\nObservaciones ({len(alertas)}):\n" + "\n".join(f"- {a}" for a in alertas[:5])
+
+        messagebox.showinfo("Preasignación Exitosa", msg)
 
     # =================== REFRESCO BATCHEADO ===================
 
