@@ -1186,10 +1186,19 @@ class VentanaGestion:
                     choques = self._detectar_choques_grupo(
                         grupo_id, mat_id, todos_dias, hora_i, hora_f
                     )
+                    choques_profesor = self._detectar_choques_profesor(
+                        self._profesor_id_seleccionado,
+                        mat_id,
+                        grupo_id,
+                        modalidad_var.get(),
+                        todos_dias,
+                        hora_i,
+                        hora_f
+                    )
                 except (sqlite3.Error, RuntimeError) as err:
                     messagebox.showerror(
                         "Error al validar horario",
-                        f"No se pudo comprobar si el grupo tiene un choque:\n{err}"
+                        f"No se pudo comprobar si el grupo o el profesor tienen un choque:\n{err}"
                     )
                     continue
                 if choques:
@@ -1211,6 +1220,29 @@ class VentanaGestion:
                         "Choque de horario",
                         f"No se guardó la asignación de {materia_txt} para el grupo "
                         f"{grupo_id} porque se cruza con otra clase del grupo:\n\n"
+                        + "\n".join(detalles)
+                    )
+                    continue
+                if choques_profesor:
+                    detalles = []
+                    for choque in choques_profesor:
+                        inicio_choque = self._minutos_hora_previa(choque['inicio'])
+                        fin_choque = self._minutos_hora_previa(choque['fin'])
+                        if inicio_choque is None or fin_choque is None:
+                            rango = f"{choque['inicio']} - {choque['fin']}"
+                        else:
+                            rango = (
+                                f"{inicio_choque // 60:02d}:{inicio_choque % 60:02d} - "
+                                f"{fin_choque // 60:02d}:{fin_choque % 60:02d}"
+                            )
+                        detalles.append(
+                            f"{choque['dia']}, {rango}: {choque['materia']} "
+                            f"(grupo {choque['grupo']})"
+                        )
+                    messagebox.showwarning(
+                        "Choque de horario del profesor",
+                        f"No se guardó la asignación de {materia_txt} para el grupo "
+                        f"{grupo_id} porque el profesor ya tiene otra clase en ese horario:\n\n"
                         + "\n".join(detalles)
                     )
                     continue
@@ -3045,6 +3077,93 @@ class VentanaGestion:
             return int(partes[0]) * 60 + int(partes[1])
         except (ValueError, IndexError):
             return None
+
+    def _detectar_choques_profesor(
+        self, profesor_id, materia_id, grupo_id, modalidad, dias, hora_i, hora_f
+    ):
+        inicio = self._minutos_hora_previa(hora_i)
+        fin = self._minutos_hora_previa(hora_f)
+        dias_propuestos = {
+            indice for indice in (self._dia_a_indice_previa(dia) for dia in dias)
+            if indice is not None
+        }
+        if inicio is None or fin is None or fin <= inicio or not dias_propuestos:
+            return []
+
+        choques = []
+        with obtener_cursor_dict() as ctx:
+            if ctx is None:
+                raise RuntimeError("No hay conexión a la base de datos para validar el horario.")
+            cur, conn = ctx
+            cur.execute(
+                """
+                SELECT asignacion_id
+                FROM asignaciones
+                WHERE profesor_id = %s
+                  AND materia_id = %s
+                  AND grupo_id = %s
+                  AND modalidad = %s
+                  AND (estado IS NULL OR estado != 'cancelada')
+                ORDER BY asignacion_id
+                LIMIT 1
+                """,
+                (profesor_id, materia_id, grupo_id, modalidad)
+            )
+            asignacion_existente = cur.fetchone()
+            excluir_id = asignacion_existente['asignacion_id'] if asignacion_existente else None
+
+            cur.execute(
+                """
+                SELECT a.asignacion_id, a.dias, a.hora_inicio AS asignacion_inicio,
+                       a.hora_fin AS asignacion_fin, a.grupo_id,
+                       m.nombre AS materia, h.dia AS horario_dia,
+                       h.hora_inicio AS horario_inicio, h.hora_fin AS horario_fin
+                FROM asignaciones a
+                LEFT JOIN materias m ON m.materia_id = a.materia_id
+                LEFT JOIN horarios h ON h.asignacion_id = a.asignacion_id
+                WHERE a.profesor_id = %s
+                  AND a.asignacion_id IS NOT ?
+                  AND (a.estado IS NULL OR a.estado != 'cancelada')
+                """,
+                (profesor_id, excluir_id)
+            )
+            for fila in cur.fetchall():
+                if fila['horario_dia'] is not None:
+                    horarios_existentes = [{
+                        "dia": fila['horario_dia'],
+                        "inicio": fila['horario_inicio'],
+                        "fin": fila['horario_fin']
+                    }]
+                else:
+                    horarios_existentes = [
+                        {
+                            "dia": dia.strip(),
+                            "inicio": fila['asignacion_inicio'],
+                            "fin": fila['asignacion_fin']
+                        }
+                        for dia in (fila.get('dias') or "").split(',')
+                        if dia.strip()
+                    ]
+
+                for horario in horarios_existentes:
+                    indice_dia = self._dia_a_indice_previa(horario['dia'])
+                    inicio_existente = self._minutos_hora_previa(horario['inicio'])
+                    fin_existente = self._minutos_hora_previa(horario['fin'])
+                    if (
+                        indice_dia in dias_propuestos
+                        and inicio_existente is not None
+                        and fin_existente is not None
+                        and inicio < fin_existente
+                        and fin > inicio_existente
+                    ):
+                        choques.append({
+                            "dia": self.NOMBRES_DIAS[indice_dia],
+                            "inicio": horario['inicio'],
+                            "fin": horario['fin'],
+                            "materia": fila.get('materia') or "Materia sin nombre",
+                            "grupo": fila['grupo_id']
+                        })
+        return choques
 
     def _detectar_choques_grupo(self, grupo_id, materia_id, dias, hora_i, hora_f):
         inicio = self._minutos_hora_previa(hora_i)
