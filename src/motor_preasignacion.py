@@ -506,3 +506,297 @@ class GeneradorPreasignacion:
             "resumen_grupos": resumen_grupos,
             "alertas": alertas
         }
+
+    def cargar_ocupacion_existente(self, excluir_grupo_id=None, excluir_asignaciones_ids=None):
+        self.ocupacion_salones.clear()
+        self.ocupacion_grupos.clear()
+        excluir_asigs = set(excluir_asignaciones_ids or [])
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return
+            cur, conn = ctx
+            cur.execute("""
+                SELECT h.salon_id, a.grupo_id, h.dia, h.hora_inicio, h.hora_fin, a.asignacion_id
+                FROM horarios h
+                JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
+                WHERE (a.estado IS NULL OR a.estado != 'cancelada')
+            """)
+            for s_id, g_id, dia, hi, hf, asig_id in cur.fetchall():
+                if excluir_grupo_id and str(g_id) == str(excluir_grupo_id):
+                    if not excluir_asigs or asig_id in excluir_asigs:
+                        continue  # Se excluye porque se va a volver a acomodar
+                slot_i = self.hora_a_slot(hi)
+                slot_f = self.hora_a_slot(hf)
+                dur = max(1, slot_f - slot_i)
+                self._registrar_bloque(s_id, g_id, dia, slot_i, dur)
+
+    def reacomodar_grupo(self, grupo_id, modo="todo", materias_ids=None):
+        """
+        Reasigna las materias de un grupo manteniendo su salón actual pero en otro orden.
+        modo:
+          - 'todo': todas las materias del grupo (incluidas las que tienen profesor)
+          - 'sin_profesor': solo materias sin profesor
+          - 'especificar': solo las materias contenidas en materias_ids
+        """
+        import random
+        self._asegurar_profesor_sin_asignar()
+        self.cargar_salones()
+
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return {"exito": False, "mensaje": "No se pudo conectar a la base de datos."}
+            cur, conn = ctx
+
+            # 1. Obtener todas las materias asignadas a este grupo
+            cur.execute("""
+                SELECT 
+                    a.asignacion_id,
+                    a.materia_id,
+                    IFNULL(m.nombre, a.materia_id) AS materia_nombre,
+                    IFNULL(m.horas_semana, 4) AS horas_semana,
+                    IFNULL(m.tipo, 'Normal') AS tipo,
+                    a.profesor_id,
+                    a.hora_inicio,
+                    a.hora_fin,
+                    a.periodo,
+                    GROUP_CONCAT(DISTINCT h.salon_id) AS salones
+                FROM asignaciones a
+                LEFT JOIN materias m ON a.materia_id = m.materia_id
+                LEFT JOIN horarios h ON a.asignacion_id = h.asignacion_id
+                WHERE a.grupo_id = %s AND (a.estado IS NULL OR a.estado != 'cancelada')
+                GROUP BY a.asignacion_id
+            """, (grupo_id,))
+            filas = cur.fetchall()
+
+            if not filas:
+                return {"exito": False, "mensaje": f"El grupo '{grupo_id}' no tiene asignaciones registradas."}
+
+            # 2. Identificar el salón base del grupo y su franja horaria
+            salon_base = None
+            lab_computo = None
+            shift_morning = True
+
+            for f in filas:
+                asig_id, m_id, m_nom, h_sem, m_tipo, prof_id, hi, hf, periodo_val, salones_str = f
+                if salones_str:
+                    for s in salones_str.split(','):
+                        s = s.strip()
+                        if s and not s.upper().startswith("MEDIACION"):
+                            if s in self.salones_computo:
+                                lab_computo = s
+                            elif s in self.salones_normales and not salon_base:
+                                salon_base = s
+                if hi:
+                    slot_hi = self.hora_a_slot(hi)
+                    if slot_hi >= 12:
+                        shift_morning = False
+
+            if not salon_base and self.salones_normales:
+                salon_base = self.salones_normales[0]
+            if not lab_computo and self.salones_computo:
+                lab_computo = self.salones_computo[0]
+
+            slot_min = 0 if shift_morning else 12
+            slot_max = 12 if shift_morning else 20
+
+            # 3. Filtrar cuáles asignaciones se reacomodan y cuáles se mantienen fijas
+            asigs_a_reacomodar = []
+            asigs_fijas = []
+            ids_a_reacomodar = set()
+
+            for f in filas:
+                asig_id, m_id, m_nom, h_sem, m_tipo, prof_id, hi, hf, periodo_val, salones_str = f
+                tiene_prof = bool(prof_id and str(prof_id).strip() != 'SIN_ASIGNAR')
+
+                reacomodar = False
+                if modo == "todo":
+                    reacomodar = True
+                elif modo == "sin_profesor":
+                    reacomodar = not tiene_prof
+                elif modo == "especificar":
+                    reacomodar = (str(m_id) in [str(x) for x in (materias_ids or [])])
+
+                item = {
+                    "asignacion_id": asig_id,
+                    "materia_id": m_id,
+                    "materia_nombre": m_nom,
+                    "horas_semana": float(h_sem),
+                    "tipo": str(m_tipo).strip().upper(),
+                    "profesor_id": prof_id,
+                    "periodo": periodo_val
+                }
+
+                if reacomodar:
+                    asigs_a_reacomodar.append(item)
+                    ids_a_reacomodar.add(asig_id)
+                else:
+                    asigs_fijas.append(item)
+
+            if not asigs_a_reacomodar:
+                return {
+                    "exito": False,
+                    "mensaje": "No se encontraron materias que cumplan con la condición seleccionada para reacomodar."
+                }
+
+            # 4. Cargar ocupación existente excluyendo las asignaciones que se van a reacomodar
+            self.cargar_ocupacion_existente(excluir_grupo_id=grupo_id, excluir_asignaciones_ids=ids_a_reacomodar)
+
+            # 5. Reordenar las materias para buscar otra solución (randomizado / rotado)
+            mejor_solucion = None
+            intentos = 0
+            max_intentos = 15
+
+            while intentos < max_intentos:
+                intentos += 1
+                ocup_salones_backup = dict(self.ocupacion_salones)
+                ocup_grupos_backup = dict(self.ocupacion_grupos)
+
+                materias_intento = list(asigs_a_reacomodar)
+                random.shuffle(materias_intento)
+
+                solucion_actual = []
+                exito_intento = True
+
+                for mat in materias_intento:
+                    m_id = mat['materia_id']
+                    m_nom = mat['materia_nombre']
+                    m_tipo = mat['tipo']
+                    h_sem = mat['horas_semana']
+
+                    if m_tipo in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN'):
+                        salon_objetivo = lab_computo or salon_base
+                    elif m_tipo == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
+                        salon_objetivo = self.salones_otros['AUDITORIO'][0]
+                    elif m_tipo == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
+                        salon_objetivo = self.salones_otros['LABORATORIO'][0]
+                    else:
+                        salon_objetivo = salon_base
+
+                    estrategias = self._generar_estrategias(h_sem)
+                    materia_asignada = False
+                    sesiones_asignadas = []
+
+                    duracion_max = max(bloques for _, bloques in estrategias[0])
+                    for estrategia in estrategias:
+                        duracion_max = max(bloques for _, bloques in estrategia)
+                        rango_slots = list(range(slot_min, slot_max - duracion_max + 1))
+                        for slot_prueba in rango_slots:
+                            posible_todos = True
+                            for dia, duracion in estrategia:
+                                if not self._es_posible_bloque(salon_objetivo, grupo_id, dia, slot_prueba, duracion):
+                                    posible_todos = False
+                                    break
+                            if posible_todos:
+                                for dia, duracion in estrategia:
+                                    self._registrar_bloque(salon_objetivo, grupo_id, dia, slot_prueba, duracion)
+                                    hora_i = self.slot_a_hora(slot_prueba)
+                                    hora_f = self.slot_a_hora(slot_prueba + duracion)
+                                    sesiones_asignadas.append({
+                                        "dia": dia,
+                                        "hora_inicio": hora_i,
+                                        "hora_fin": hora_f,
+                                        "salon_id": salon_objetivo
+                                    })
+                                materia_asignada = True
+                                break
+                        if materia_asignada:
+                            break
+
+                    if not materia_asignada:
+                        for estrategia in estrategias:
+                            sesiones_temp = []
+                            exito_est = True
+                            for dia, duracion in estrategia:
+                                encontrado_dia = False
+                                for slot_prueba in range(slot_min, slot_max - duracion + 1):
+                                    if self._es_posible_bloque(salon_objetivo, grupo_id, dia, slot_prueba, duracion):
+                                        hora_i = self.slot_a_hora(slot_prueba)
+                                        hora_f = self.slot_a_hora(slot_prueba + duracion)
+                                        sesiones_temp.append({
+                                            "dia": dia,
+                                            "hora_inicio": hora_i,
+                                            "hora_fin": hora_f,
+                                            "salon_id": salon_objetivo,
+                                            "slot": slot_prueba,
+                                            "duracion": duracion
+                                        })
+                                        encontrado_dia = True
+                                        break
+                                if not encontrado_dia:
+                                    exito_est = False
+                                    break
+
+                            if exito_est:
+                                for item in sesiones_temp:
+                                    self._registrar_bloque(item['salon_id'], grupo_id, item['dia'], item['slot'], item['duracion'])
+                                    sesiones_asignadas.append({
+                                        "dia": item['dia'],
+                                        "hora_inicio": item['hora_inicio'],
+                                        "hora_fin": item['hora_fin'],
+                                        "salon_id": item['salon_id']
+                                    })
+                                materia_asignada = True
+                                break
+
+                    if materia_asignada:
+                        dias_str = ",".join(s['dia'] for s in sesiones_asignadas)
+                        hi_ref = min(s['hora_inicio'] for s in sesiones_asignadas)
+                        hf_ref = max(s['hora_fin'] for s in sesiones_asignadas)
+                        solucion_actual.append({
+                            "asignacion_id": mat['asignacion_id'],
+                            "materia_id": m_id,
+                            "materia_nombre": m_nom,
+                            "hora_inicio": hi_ref,
+                            "hora_fin": hf_ref,
+                            "dias": dias_str,
+                            "sesiones": sesiones_asignadas
+                        })
+                    else:
+                        exito_intento = False
+                        break
+
+                if exito_intento:
+                    mejor_solucion = solucion_actual
+                    break
+                else:
+                    self.ocupacion_salones = ocup_salones_backup
+                    self.ocupacion_grupos = ocup_grupos_backup
+                    if mejor_solucion is None or len(solucion_actual) > len(mejor_solucion):
+                        mejor_solucion = solucion_actual
+
+            if not mejor_solucion or len(mejor_solucion) < len(asigs_a_reacomodar):
+                return {
+                    "exito": False,
+                    "mensaje": f"No se encontró un acomodo completo para las {len(asigs_a_reacomodar)} materias del grupo '{grupo_id}' en el salón {salon_base}."
+                }
+
+            # 6. Persistir la nueva distribución en la base de datos
+            try:
+                for asig in mejor_solucion:
+                    asig_id = asig['asignacion_id']
+                    cur.execute("""
+                        UPDATE asignaciones
+                        SET hora_inicio = %s, hora_fin = %s, dias = %s
+                        WHERE asignacion_id = %s
+                    """, (asig['hora_inicio'], asig['hora_fin'], asig['dias'], asig_id))
+
+                    cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (asig_id,))
+                    for ses in asig['sesiones']:
+                        cur.execute("""
+                            INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (asig_id, ses['salon_id'], ses['dia'], ses['hora_inicio'], ses['hora_fin']))
+
+                conn.commit()
+            except sqlite3.Error as err:
+                conn.rollback()
+                return {"exito": False, "mensaje": f"Error persistiendo el reacomodo: {err}"}
+
+            return {
+                "exito": True,
+                "grupo_id": grupo_id,
+                "salon_base": salon_base,
+                "total_reacomodadas": len(mejor_solucion),
+                "total_solicitadas": len(asigs_a_reacomodar),
+                "intentos": intentos
+            }

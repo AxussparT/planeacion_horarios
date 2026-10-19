@@ -313,6 +313,7 @@ class VentanaGestion:
         self.combo_grupo_gestion.bind("<<ComboboxSelected>>", self._on_cambio_grupo_gestion)
 
         ttk.Button(f_grupo_linea, text="Refrescar", command=self._cargar_materias_grupo_gestion).pack(side='left', padx=4)
+        ttk.Button(f_grupo_linea, text="🔄 Volver a preasignar", command=self._confirmar_volver_a_preasignar_grupo).pack(side='left', padx=4)
 
         self._lbl_info_grupo_gestion = ttk.Label(f_grupo_sel, text="", background='#0A0F1E', foreground='#FFD700', font=self._fuente_label)
         self._lbl_info_grupo_gestion.pack(fill='x', padx=8, pady=(2, 4))
@@ -608,11 +609,18 @@ class VentanaGestion:
             self.frame_der, text="Horario del grupo", style='blue.TFrame'
         )
         self.frame_previa_horario.pack(fill='x', padx=6, pady=(4, 8))
+        f_top_previa = ttk.Frame(self.frame_previa_horario, style='blue.TFrame')
+        f_top_previa.pack(fill='x', padx=4, pady=(2, 2))
         ttk.Button(
-            self.frame_previa_horario,
+            f_top_previa,
+            text="🔄 Volver a preasignar grupo",
+            command=self._confirmar_volver_a_preasignar_grupo
+        ).pack(side='left', padx=4)
+        ttk.Button(
+            f_top_previa,
             text="Ajustar vista",
             command=self._abrir_previa_horario_ajustada
-        ).pack(anchor='e', padx=4, pady=(4, 0))
+        ).pack(side='right', padx=4)
         self.canvas_previa_horario = tk.Canvas(
             self.frame_previa_horario, height=566, background='white',
             highlightthickness=0
@@ -4463,6 +4471,240 @@ class VentanaGestion:
 
         ventana.protocol("WM_DELETE_WINDOW", cerrar)
         self._dibujar_previa_horario_grupo(canvas)
+
+    def _confirmar_volver_a_preasignar_grupo(self):
+        grupo_id = ""
+        if hasattr(self, '_sv_filtro_grupo_vp'):
+            grupo_id = self._sv_filtro_grupo_vp.get().strip()
+        if (not grupo_id or grupo_id == "Todos") and hasattr(self, '_sv_grupo_gestion'):
+            grupo_id = self._sv_grupo_gestion.get().strip()
+
+        if not grupo_id or grupo_id == "Todos":
+            messagebox.showwarning(
+                "Seleccionar Grupo",
+                "Por favor selecciona un grupo específico (en la vista de gestión o en el selector de vista previa) para volver a acomodar sus materias."
+            )
+            return
+
+        salon_actual = "Sin aula"
+        materias_grupo = []
+        with obtener_cursor() as ctx:
+            if ctx:
+                cur, conn = ctx
+                cur.execute("""
+                    SELECT DISTINCT h.salon_id
+                    FROM horarios h
+                    JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
+                    WHERE a.grupo_id = %s AND h.salon_id NOT LIKE 'MEDIACION%'
+                """, (grupo_id,))
+                rows = cur.fetchall()
+                if rows:
+                    salon_actual = ", ".join(r[0] for r in rows)
+
+                cur.execute("""
+                    SELECT a.materia_id, IFNULL(m.nombre, a.materia_id), a.profesor_id, IFNULL(p.nombre, 'Sin profesor')
+                    FROM asignaciones a
+                    LEFT JOIN materias m ON a.materia_id = m.materia_id
+                    LEFT JOIN profesores p ON a.profesor_id = p.profesor_id
+                    WHERE a.grupo_id = %s AND (a.estado IS NULL OR a.estado != 'cancelada')
+                    ORDER BY a.materia_id
+                """, (grupo_id,))
+                materias_grupo = cur.fetchall()
+
+        if not materias_grupo:
+            messagebox.showwarning(
+                "Sin Materias",
+                f"El grupo '{grupo_id}' no tiene materias preasignadas registradas actualmente."
+            )
+            return
+
+        dialogo = tk.Toplevel(self.ventana)
+        dialogo.title("Volver a acomodar materias del grupo")
+        dialogo.transient(self.ventana)
+        dialogo.grab_set()
+        dialogo.configure(background='#0A0F1E')
+        dialogo.geometry("560x370")
+        dialogo.resizable(False, False)
+
+        f_cont = ttk.Frame(dialogo, style='blue.TFrame')
+        f_cont.pack(fill='both', expand=True, padx=20, pady=16)
+
+        ttk.Label(
+            f_cont,
+            text="¿Desea volver a acomodar materias en el salón?",
+            background='#0A0F1E',
+            foreground='#FFD700',
+            font=self._fuente_titulo
+        ).pack(anchor='w', pady=(0, 4))
+
+        ttk.Label(
+            f_cont,
+            text=f"Grupo: {grupo_id}   |   Salón asignado: {salon_actual}   |   Total materias: {len(materias_grupo)}",
+            background='#0A0F1E',
+            foreground='white',
+            font=self._fuente_sub
+        ).pack(anchor='w', pady=(0, 10))
+
+        ttk.Label(
+            f_cont,
+            text="Se mantendrá al grupo en el mismo salón y se buscará una nueva distribución horaria en otro orden.\nSeleccione el alcance deseado:",
+            background='#0A0F1E',
+            foreground='#B0BEC5',
+            font=self._fuente_label,
+            justify='left'
+        ).pack(anchor='w', pady=(0, 14))
+
+        def _on_opcion_todo():
+            dialogo.destroy()
+            self._ejecutar_reacomodo_motor(grupo_id, modo="todo")
+
+        def _on_opcion_sin_profesor():
+            dialogo.destroy()
+            self._ejecutar_reacomodo_motor(grupo_id, modo="sin_profesor")
+
+        def _on_opcion_especificar():
+            dialogo.destroy()
+            self._mostrar_modal_especificar_materias(grupo_id, salon_actual, materias_grupo)
+
+        def _on_cancelar():
+            dialogo.destroy()
+
+        btn_todo = ttk.Button(
+            f_cont,
+            text="1. Sí (Reacomodar TODO el grupo, incluyendo con profesor)",
+            command=_on_opcion_todo
+        )
+        btn_todo.pack(fill='x', pady=4)
+
+        btn_sin_prof = ttk.Button(
+            f_cont,
+            text="2. Sí, pero SOLO a las asignaciones sin profesores",
+            command=_on_opcion_sin_profesor
+        )
+        btn_sin_prof.pack(fill='x', pady=4)
+
+        btn_especificar = ttk.Button(
+            f_cont,
+            text="3. Especificar materias con checklist...",
+            command=_on_opcion_especificar
+        )
+        btn_especificar.pack(fill='x', pady=4)
+
+        btn_cancelar = ttk.Button(
+            f_cont,
+            text="No (Cancelar)",
+            command=_on_cancelar
+        )
+        btn_cancelar.pack(fill='x', pady=(10, 4))
+
+    def _mostrar_modal_especificar_materias(self, grupo_id, salon_actual, materias_grupo):
+        dlg_esp = tk.Toplevel(self.ventana)
+        dlg_esp.title(f"Especificar Materias a Reacomodar - Grupo {grupo_id}")
+        dlg_esp.transient(self.ventana)
+        dlg_esp.grab_set()
+        dlg_esp.configure(background='#0A0F1E')
+        dlg_esp.geometry("620x480")
+
+        f_cont = ttk.Frame(dlg_esp, style='blue.TFrame')
+        f_cont.pack(fill='both', expand=True, padx=16, pady=14)
+
+        ttk.Label(
+            f_cont,
+            text="Marque las materias que desea volver a acomodar:",
+            background='#0A0F1E',
+            foreground='#FFD700',
+            font=self._fuente_sub
+        ).pack(anchor='w', pady=(0, 4))
+
+        ttk.Label(
+            f_cont,
+            text=f"Grupo: {grupo_id} | Salón: {salon_actual}. Las materias no marcadas mantendrán su horario actual.",
+            background='#0A0F1E',
+            foreground='#B0BEC5',
+            font=self._fuente_label
+        ).pack(anchor='w', pady=(0, 8))
+
+        canvas_mats = tk.Canvas(f_cont, background='#0A0F1E', highlightthickness=0)
+        sb_mats = ttk.Scrollbar(f_cont, orient='vertical', command=canvas_mats.yview)
+        f_lista = ttk.Frame(canvas_mats, style='blue.TFrame')
+
+        f_lista.bind('<Configure>', lambda e: canvas_mats.configure(scrollregion=canvas_mats.bbox('all')))
+        canvas_win = canvas_mats.create_window((0, 0), window=f_lista, anchor='nw')
+        canvas_mats.bind('<Configure>', lambda e: canvas_mats.itemconfig(canvas_win, width=e.width))
+        canvas_mats.configure(yscrollcommand=sb_mats.set)
+
+        canvas_mats.pack(side='top', fill='both', expand=True, pady=4)
+        sb_mats.pack(side='right', fill='y', before=canvas_mats)
+
+        vars_materias = {}
+        for m_id, m_nom, p_id, p_nom in materias_grupo:
+            tiene_prof = bool(p_id and str(p_id).strip() != 'SIN_ASIGNAR')
+            var_m = tk.BooleanVar(value=True)
+            vars_materias[str(m_id)] = var_m
+
+            f_fila_m = ttk.Frame(f_lista, style='blue.TFrame')
+            f_fila_m.pack(fill='x', padx=4, pady=2)
+
+            cb = ttk.Checkbutton(
+                f_fila_m,
+                text=f"{m_id} - {m_nom}",
+                variable=var_m,
+                style='Custom.TCheckbutton'
+            )
+            cb.pack(side='left', padx=4)
+
+            info_prof = f"Profesor: {p_nom}" if tiene_prof else "(Sin profesor)"
+            color_prof = '#98FB98' if tiene_prof else '#7E8B9B'
+            ttk.Label(
+                f_fila_m,
+                text=info_prof,
+                background='#0A0F1E',
+                foreground=color_prof,
+                font=self._fuente_label
+            ).pack(side='right', padx=6)
+
+        f_btns = ttk.Frame(f_cont, style='blue.TFrame')
+        f_btns.pack(fill='x', pady=(10, 0))
+
+        def _seleccionar_todas(val):
+            for v in vars_materias.values():
+                v.set(val)
+
+        ttk.Button(f_btns, text="Marcar Todas", command=lambda: _seleccionar_todas(True)).pack(side='left', padx=3)
+        ttk.Button(f_btns, text="Desmarcar Todas", command=lambda: _seleccionar_todas(False)).pack(side='left', padx=3)
+
+        def _on_confirmar():
+            seleccionadas = [m_id for m_id, v in vars_materias.items() if v.get()]
+            if not seleccionadas:
+                messagebox.showwarning("Aviso", "Debes seleccionar al menos una materia para reacomodar.")
+                return
+            dlg_esp.destroy()
+            self._ejecutar_reacomodo_motor(grupo_id, modo="especificar", materias_ids=seleccionadas)
+
+        ttk.Button(f_btns, text="No (Cancelar)", command=dlg_esp.destroy).pack(side='right', padx=3)
+        ttk.Button(f_btns, text="🔄 Reacomodar Seleccionadas", command=_on_confirmar).pack(side='right', padx=3)
+
+    def _ejecutar_reacomodo_motor(self, grupo_id, modo="todo", materias_ids=None):
+        from src.motor_preasignacion import GeneradorPreasignacion
+        motor = GeneradorPreasignacion()
+        res = motor.reacomodar_grupo(grupo_id=grupo_id, modo=modo, materias_ids=materias_ids)
+
+        if not res.get("exito"):
+            messagebox.showerror("Reacomodo No Completado", res.get("mensaje", "Ocurrió un error al reacomodar."))
+            return
+
+        self._cargar_materias_grupo_gestion()
+        self.actualizar_vista_previa()
+        self._cargar_previa_horario_grupo()
+        self._cargar_tensor_diferido(forzar=True)
+
+        messagebox.showinfo(
+            "Reacomodo Exitoso",
+            f"¡Grupo {grupo_id} reorganizado con éxito!\n\n"
+            f"• Salón mantenido: {res['salon_base']}\n"
+            f"• Materias reacomodadas: {res['total_reacomodadas']} de {res['total_solicitadas']}\n"
+            f"• Se generó una nueva distribución horaria en {res.get('intentos', 1)} intento(s)."
+        )
 
     def _dibujar_previa_horario_grupo(self, canvas=None):
         if canvas is None:
