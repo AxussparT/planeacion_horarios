@@ -633,7 +633,7 @@ class VentanaGestion:
         periodo_txt = self.combo_periodos.get()
         materias = self.lista_maestra_materias
         if periodo_txt:
-            semestres_validos = [1, 3, 5, 7, 9] if periodo_txt == "A" else [2, 4, 6, 8, 10]
+            semestres_validos = [2, 4, 6, 8, 10] if periodo_txt == "A" else [1, 3, 5, 7, 9]
             materias = [m for m in materias if m["semestre"] in semestres_validos]
         if semestre_txt and ' - ' in semestre_txt:
             try:
@@ -2593,7 +2593,7 @@ class VentanaGestion:
         periodo = self.combo_periodos.get()
         if not periodo: return
         self._periodo_seleccionado = periodo
-        semestres_validos = [1, 3, 5, 7, 9] if periodo == "A" else [2, 4, 6, 8, 10]
+        semestres_validos = [2, 4, 6, 8, 10] if periodo == "A" else [1, 3, 5, 7, 9]
         self._semestres_filtrados = semestres_validos
         lista_sem = [v for k, v in self.semestres_map.items() if int(k) in semestres_validos]
         if lista_sem:
