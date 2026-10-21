@@ -1393,87 +1393,26 @@ class VentanaGestion:
         dialogo.transient(self.ventana)
         dialogo.grab_set()
         dialogo.configure(background='#0A0F1E')
-        dialogo.geometry("620x470")
-        dialogo.resizable(False, False)
 
-        f_cont = ttk.Frame(dialogo, style='blue.TFrame')
-        f_cont.pack(fill='both', expand=True, padx=18, pady=16)
+        ancho_dlg = 760
+        alto_dlg = 640
 
-        ttk.Label(
-            f_cont,
-            text="⚡ Sugerencia: Compactación Continua de Jornada",
-            background='#0A0F1E',
-            foreground='#FFD700',
-            font=self._fuente_titulo
-        ).pack(anchor='w', pady=(0, 4))
+        try:
+            self.ventana.update_idletasks()
+            px = self.ventana.winfo_rootx() + (self.ventana.winfo_width() // 2) - (ancho_dlg // 2)
+            py = self.ventana.winfo_rooty() + (self.ventana.winfo_height() // 2) - (alto_dlg // 2)
+            if px < 20: px = 20
+            if py < 20: py = 20
+            dialogo.geometry(f"{ancho_dlg}x{alto_dlg}+{px}+{py}")
+        except Exception:
+            dialogo.geometry(f"{ancho_dlg}x{alto_dlg}")
 
-        ttk.Label(
-            f_cont,
-            text=f"El profesor {prof_nombre} ya cuenta con clases asignadas. El motor detectó una oportunidad para concentrar su asistencia en 2 días con clases corridas (sin tiempos muertos):",
-            background='#0A0F1E',
-            foreground='#CFD8DC',
-            font=self._fuente_label,
-            wraplength=580,
-            justify='left'
-        ).pack(anchor='w', pady=(0, 8))
+        dialogo.minsize(680, 500)
+        dialogo.resizable(True, True)
 
-        f_exist = ttk.LabelFrame(f_cont, text="Clases ya asignadas a este profesor", style='blue.TFrame')
-        f_exist.pack(fill='x', pady=4)
-        txt_exist = "\n".join(compactacion['clases_actuales'][:4])
-        ttk.Label(
-            f_exist,
-            text=txt_exist,
-            background='#0A0F1E',
-            foreground='#90CAF9',
-            font=self._fuente_label,
-            justify='left'
-        ).pack(anchor='w', padx=10, pady=6)
-
-        f_prop = ttk.LabelFrame(f_cont, text="Comparativa de Asignación", style='blue.TFrame')
-        f_prop.pack(fill='x', pady=6)
-
-        h_act = f"{asig_info.get('hora_inicio')} a {asig_info.get('hora_fin')} [{asig_info.get('dias')}] en Aula {asig_info.get('salon_id')}"
-        tipo_continua = " (Clase corrida contigua)" if compactacion.get('es_continua') else " (Mismos días)"
-        h_sug = f"{compactacion['hora_i']} a {compactacion['hora_f']} [{compactacion['dias_str']}] en Aula {compactacion['salon']}{tipo_continua}"
-
-        f_grid = ttk.Frame(f_prop, style='blue.TFrame')
-        f_grid.pack(fill='x', padx=8, pady=6)
-
-        ttk.Label(f_grid, text="Horario Preasignado:", background='#0A0F1E', foreground='#B0BEC5', font=self._fuente_sub).grid(row=0, column=0, sticky='w', pady=2)
-        ttk.Label(f_grid, text=h_act, background='#0A0F1E', foreground='#FFAB91', font=self._fuente_label).grid(row=0, column=1, sticky='w', padx=8, pady=2)
-
-        ttk.Label(f_grid, text="Propuesta Compactada:", background='#0A0F1E', foreground='#B0BEC5', font=self._fuente_sub).grid(row=1, column=0, sticky='w', pady=2)
-        ttk.Label(f_grid, text=h_sug, background='#0A0F1E', foreground='#A5D6A7', font=self._fuente_btn).grid(row=1, column=1, sticky='w', padx=8, pady=2)
-
-        desp = compactacion.get('desplazamiento')
-        if desp:
-            f_desp = ttk.LabelFrame(f_cont, text="Reacomodo Interno (Mismo Salón)", style='blue.TFrame')
-            f_desp.pack(fill='x', pady=4)
-            txt_desp = (
-                f"• Para habilitar este horario corrido, la materia '{desp['materia_nombre']}' (Grupo {desp['grupo_id']}),\n"
-                f"  que no tiene profesor asignado, se reubicará al horario {desp['nuevo_hora_i']} a {desp['nuevo_hora_f']} [{desp['nuevos_dias_str']}]\n"
-                f"  dentro del mismo salón {desp['salon']}."
-            )
-            ttk.Label(
-                f_desp,
-                text=txt_desp,
-                background='#0A0F1E',
-                foreground='#FFE082',
-                font=self._fuente_sub,
-                justify='left'
-            ).pack(anchor='w', padx=10, pady=4)
-
-        ttk.Label(
-            f_cont,
-            text=f"✔ Concentra la asistencia del profesor en 2 días.\n✔ Clases corridas sin horas libres intermedias.\n✔ Aula conservada: {compactacion['salon']}.\n✔ Sin afectar a ningún otro profesor.",
-            background='#0A0F1E',
-            foreground='#81C784',
-            font=self._fuente_label,
-            justify='left'
-        ).pack(anchor='w', pady=4)
-
-        f_btns = ttk.Frame(f_cont, style='blue.TFrame')
-        f_btns.pack(fill='x', side='bottom', pady=(10, 0))
+        # 1. PIE DE PÁGINA (Botones SIEMPRE visibles y anclados al fondo)
+        f_btns = ttk.Frame(dialogo, style='blue.TFrame')
+        f_btns.pack(side='bottom', fill='x', padx=20, pady=(10, 16))
 
         def _aceptar():
             resultado[0] = True
@@ -1487,9 +1426,137 @@ class VentanaGestion:
             resultado[0] = None
             dialogo.destroy()
 
-        ttk.Button(f_btns, text="Cancelar", command=_cancelar).pack(side='right', padx=4)
-        ttk.Button(f_btns, text="Mantener Horario Original", command=_conservar).pack(side='right', padx=4)
-        ttk.Button(f_btns, text="⚡ Sí, Compactar Horario", command=_aceptar).pack(side='right', padx=4)
+        btn_cancelar = ttk.Button(f_btns, text="Cancelar", command=_cancelar)
+        btn_cancelar.pack(side='right', padx=6)
+
+        btn_conservar = ttk.Button(f_btns, text="Mantener Horario Original", command=_conservar)
+        btn_conservar.pack(side='right', padx=6)
+
+        btn_compactar = ttk.Button(f_btns, text="⚡ Sí, Compactar Horario", command=_aceptar)
+        btn_compactar.pack(side='right', padx=6)
+
+        sep = ttk.Separator(dialogo, orient='horizontal')
+        sep.pack(side='bottom', fill='x', padx=16, pady=(4, 0))
+
+        # 2. ÁREA CENTRAL DESPLAZABLE (Canvas con Scrollbar para garantizar visualización total)
+        f_scroll_cont = ttk.Frame(dialogo, style='blue.TFrame')
+        f_scroll_cont.pack(side='top', fill='both', expand=True, padx=16, pady=(14, 4))
+
+        canvas = tk.Canvas(f_scroll_cont, background='#0A0F1E', highlightthickness=0, bd=0)
+        sb_v = ttk.Scrollbar(f_scroll_cont, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=sb_v.set)
+
+        sb_v.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+
+        f_cont = ttk.Frame(canvas, style='blue.TFrame')
+        canvas_window = canvas.create_window((0, 0), window=f_cont, anchor='nw')
+
+        def _on_canvas_configure(evt):
+            canvas.itemconfig(canvas_window, width=evt.width)
+        canvas.bind('<Configure>', _on_canvas_configure)
+
+        def _on_frame_configure(evt):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        f_cont.bind('<Configure>', _on_frame_configure)
+
+        def _on_mousewheel(evt):
+            try:
+                delta = -1 if evt.delta < 0 else 1
+                canvas.yview_scroll(delta * -1, "units")
+            except Exception:
+                pass
+
+        def _bind_mousewheel(evt=None):
+            canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        def _unbind_mousewheel(evt=None):
+            try:
+                canvas.unbind_all("<MouseWheel>")
+            except Exception:
+                pass
+
+        canvas.bind("<Enter>", _bind_mousewheel)
+        canvas.bind("<Leave>", _unbind_mousewheel)
+        dialogo.bind("<Destroy>", _unbind_mousewheel)
+
+        # 3. CONTENIDO DEL DIÁLOGO
+        ttk.Label(
+            f_cont,
+            text="⚡ Sugerencia: Compactación Continua de Jornada",
+            background='#0A0F1E',
+            foreground='#FFD700',
+            font=self._fuente_titulo
+        ).pack(anchor='w', pady=(0, 6))
+
+        ttk.Label(
+            f_cont,
+            text=f"El profesor {prof_nombre} ya cuenta con clases asignadas. El motor detectó una oportunidad para concentrar su asistencia en 2 días con clases corridas (sin tiempos muertos):",
+            background='#0A0F1E',
+            foreground='#CFD8DC',
+            font=self._fuente_label,
+            wraplength=670,
+            justify='left'
+        ).pack(anchor='w', pady=(0, 10))
+
+        # Bloque 1: Clases asignadas actualmente
+        f_exist = ttk.LabelFrame(f_cont, text=" Clases ya asignadas a este profesor ", style='blue.TFrame')
+        f_exist.pack(fill='x', pady=4)
+        txt_exist = "\n".join(compactacion['clases_actuales'][:6])
+        ttk.Label(
+            f_exist,
+            text=txt_exist,
+            background='#0A0F1E',
+            foreground='#90CAF9',
+            font=self._fuente_label,
+            justify='left'
+        ).pack(anchor='w', padx=12, pady=8)
+
+        # Bloque 2: Comparativa de Horarios
+        f_prop = ttk.LabelFrame(f_cont, text=" Comparativa de Asignación ", style='blue.TFrame')
+        f_prop.pack(fill='x', pady=6)
+
+        h_act = f"{asig_info.get('hora_inicio')} a {asig_info.get('hora_fin')} [{asig_info.get('dias')}] en Aula {asig_info.get('salon_id')}"
+        tipo_continua = " (Clase corrida contigua)" if compactacion.get('es_continua') else " (Mismos días)"
+        h_sug = f"{compactacion['hora_i']} a {compactacion['hora_f']} [{compactacion['dias_str']}] en Aula {compactacion['salon']}{tipo_continua}"
+
+        f_grid = ttk.Frame(f_prop, style='blue.TFrame')
+        f_grid.pack(fill='x', padx=10, pady=8)
+
+        ttk.Label(f_grid, text="Horario Preasignado:", background='#0A0F1E', foreground='#B0BEC5', font=self._fuente_sub).grid(row=0, column=0, sticky='w', pady=3)
+        ttk.Label(f_grid, text=h_act, background='#0A0F1E', foreground='#FFAB91', font=self._fuente_label, wraplength=490, justify='left').grid(row=0, column=1, sticky='w', padx=10, pady=3)
+
+        ttk.Label(f_grid, text="Propuesta Compactada:", background='#0A0F1E', foreground='#B0BEC5', font=self._fuente_sub).grid(row=1, column=0, sticky='w', pady=3)
+        ttk.Label(f_grid, text=h_sug, background='#0A0F1E', foreground='#A5D6A7', font=self._fuente_btn, wraplength=490, justify='left').grid(row=1, column=1, sticky='w', padx=10, pady=3)
+
+        # Bloque 3: Reacomodo en el mismo salón (si aplica)
+        desp = compactacion.get('desplazamiento')
+        if desp:
+            f_desp = ttk.LabelFrame(f_cont, text=" Reacomodo Interno (Mismo Salón) ", style='blue.TFrame')
+            f_desp.pack(fill='x', pady=6)
+            txt_desp = (
+                f"• Para habilitar este horario corrido, la materia '{desp['materia_nombre']}' (Grupo {desp['grupo_id']}),\n"
+                f"  que no tiene profesor asignado, se reubicará al horario {desp['nuevo_hora_i']} a {desp['nuevo_hora_f']} [{desp['nuevos_dias_str']}]\n"
+                f"  dentro del mismo salón {desp['salon']}."
+            )
+            ttk.Label(
+                f_desp,
+                text=txt_desp,
+                background='#0A0F1E',
+                foreground='#FFE082',
+                font=self._fuente_sub,
+                wraplength=670,
+                justify='left'
+            ).pack(anchor='w', padx=12, pady=6)
+
+        # Bloque 4: Lista de verificación de ventajas
+        ttk.Label(
+            f_cont,
+            text=f"✔ Concentra la asistencia del profesor en 2 días.\n✔ Clases corridas sin horas libres intermedias.\n✔ Aula conservada: {compactacion['salon']}.\n✔ Sin afectar a ningún otro profesor.",
+            background='#0A0F1E',
+            foreground='#81C784',
+            font=self._fuente_label,
+            justify='left'
+        ).pack(anchor='w', pady=(6, 12))
 
         dialogo.wait_window()
         return resultado[0]
@@ -1722,10 +1789,41 @@ class VentanaGestion:
         dialogo.transient(self.ventana)
         dialogo.grab_set()
         dialogo.configure(background='#0A0F1E')
-        dialogo.geometry("640x520")
+        dialogo.geometry("680x570")
+        dialogo.minsize(620, 480)
+        dialogo.resizable(True, True)
+
+        # Botones siempre anclados abajo
+        f_btns = ttk.Frame(dialogo, style='blue.TFrame')
+        f_btns.pack(side='bottom', fill='x', padx=18, pady=(10, 14))
+
+        opcion_var = tk.StringVar(value="imponer")
+
+        def ejecutar_resolucion():
+            eleccion = opcion_var.get()
+            dialogo.destroy()
+
+            if eleccion == "cancelar":
+                messagebox.showinfo("Cancelado", "Asignación cancelada. No se realizaron cambios.")
+                return
+
+            elif eleccion == "imponer":
+                self._aplicar_vinculacion_docente(asig_info['asignacion_id'], prof_id, estado='pendiente')
+
+            elif eleccion == "intercambiar":
+                self._ejecutar_intercambio_profesor(asig_info, prof_id, prof_nombre, choques)
+
+            elif eleccion == "reubicar":
+                self._ejecutar_reubicacion_automatica(asig_info, prof_id, prof_nombre)
+
+        ttk.Button(f_btns, text="Cerrar", command=dialogo.destroy).pack(side='right', padx=4)
+        ttk.Button(f_btns, text="Confirmar y Aplicar", command=ejecutar_resolucion).pack(side='right', padx=4)
+
+        sep = ttk.Separator(dialogo, orient='horizontal')
+        sep.pack(side='bottom', fill='x', padx=16, pady=(4, 0))
 
         f_cont = ttk.Frame(dialogo, style='blue.TFrame')
-        f_cont.pack(fill='both', expand=True, padx=16, pady=14)
+        f_cont.pack(fill='both', expand=True, padx=18, pady=(14, 4))
 
         ttk.Label(
             f_cont,
@@ -1759,8 +1857,6 @@ class VentanaGestion:
             font=self._fuente_sub
         ).pack(anchor='w', pady=(8, 4))
 
-        opcion_var = tk.StringVar(value="imponer")
-
         rb1 = ttk.Radiobutton(
             f_cont,
             text="1. Intercambiar profesor (Intercambiar con el docente de la otra clase en conflicto)",
@@ -1792,29 +1888,6 @@ class VentanaGestion:
             value="reubicar"
         )
         rb4.pack(anchor='w', pady=3)
-
-        f_btns = ttk.Frame(f_cont, style='blue.TFrame')
-        f_btns.pack(fill='x', pady=(16, 0))
-
-        def ejecutar_resolucion():
-            eleccion = opcion_var.get()
-            dialogo.destroy()
-
-            if eleccion == "cancelar":
-                messagebox.showinfo("Cancelado", "Asignación cancelada. No se realizaron cambios.")
-                return
-
-            elif eleccion == "imponer":
-                self._aplicar_vinculacion_docente(asig_info['asignacion_id'], prof_id, estado='pendiente')
-
-            elif eleccion == "intercambiar":
-                self._ejecutar_intercambio_profesor(asig_info, prof_id, prof_nombre, choques)
-
-            elif eleccion == "reubicar":
-                self._ejecutar_reubicacion_automatica(asig_info, prof_id, prof_nombre)
-
-        ttk.Button(f_btns, text="Confirmar y Aplicar", command=ejecutar_resolucion).pack(side='right', padx=4)
-        ttk.Button(f_btns, text="Cerrar", command=dialogo.destroy).pack(side='right', padx=4)
 
     def _ejecutar_intercambio_profesor(self, asig_info, prof_id, prof_nombre, choques):
         """
