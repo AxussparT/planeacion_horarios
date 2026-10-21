@@ -14,6 +14,18 @@ from src.conexion import obtener_cursor
 class GeneradorSabana:
     DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
     HORAS = [f"{h:02d}:00" for h in range(7, 18)]
+    FRANJAS_30MIN = [
+        ("07:00", "07:30"), ("07:30", "08:00"),
+        ("08:00", "08:30"), ("08:30", "09:00"),
+        ("09:00", "09:30"), ("09:30", "10:00"),
+        ("10:00", "10:30"), ("10:30", "11:00"),
+        ("11:00", "11:30"), ("11:30", "12:00"),
+        ("12:00", "12:30"), ("12:30", "13:00"),
+        ("13:00", "13:30"), ("13:30", "14:00"),
+        ("14:00", "14:30"), ("14:30", "15:00"),
+        ("15:00", "15:30"), ("15:30", "16:00"),
+        ("16:00", "16:30"), ("16:30", "17:00")
+    ]
 
     @staticmethod
     def _normalizar_dia(dia):
@@ -207,27 +219,26 @@ class GeneradorSabana:
 
             ws.row_dimensions[3].height = 26
 
-            # Llenado de Filas: Día por Día, Franja por Franja (de 07:00 a 17:00)
-            franjas = [
-                ("07:00", "08:00"), ("08:00", "09:00"), ("09:00", "10:00"),
-                ("10:00", "11:00"), ("11:00", "12:00"), ("12:00", "13:00"),
-                ("13:00", "14:00"), ("14:00", "15:00"), ("15:00", "16:00"),
-                ("16:00", "17:00")
-            ]
+            # Llenado de Filas: Día por Día, Franjas de 30 minutos (07:00 a 17:00)
+            franjas = cls.FRANJAS_30MIN
+            fill_clase = PatternFill(start_color="EFF6FF", end_color="EFF6FF", fill_type="solid")
 
             fila_actual = 4
             for dia in cls.DIAS:
                 fila_inicio_dia = fila_actual
+                col_data = {col_idx: {} for col_idx in range(3, 3 + len(lista_grupos))}
+
                 for h_ini_f, h_fin_f in franjas:
                     f_ini_min = cls._hora_a_minutos(h_ini_f)
                     f_fin_min = cls._hora_a_minutos(h_fin_f)
 
-                    # Columna B: Franja Horaria
+                    # Columna B: Franja Horaria (30 minutos)
                     c_h = ws.cell(row=fila_actual, column=2, value=f"{h_ini_f} - {h_fin_f}")
                     c_h.font = font_hora
                     c_h.fill = fill_hora
                     c_h.alignment = align_center
                     c_h.border = border_box
+                    ws.row_dimensions[fila_actual].height = 24
 
                     # Columnas C..N: Grupos
                     for col_idx, g_id in enumerate(lista_grupos, start=3):
@@ -237,38 +248,61 @@ class GeneradorSabana:
                             if s['dia'] == dia and s['ini_min'] < f_fin_min and s['fin_min'] > f_ini_min
                         ]
 
-                        c_val = ws.cell(row=fila_actual, column=col_idx)
-                        c_val.border = border_box
-                        c_val.alignment = align_center
-
                         if coincidentes:
-                            # Formatear el contenido de la materia en este bloque
-                            partes_txt = []
-                            for ses in coincidentes:
-                                modal_txt = " [MT]" if ses.get('modalidad') == 'Mediación Tecnológica' else ""
-                                partes_txt.append(
-                                    f"{ses['materia_nombre']}\n"
-                                    f"Prof: {ses['profesor_nombre']}\n"
-                                    f"Aula: {ses['salon_id']}{modal_txt}"
-                                )
-                            c_val.value = "\n---\n".join(partes_txt)
-                            c_val.font = font_celda
-                            # Color suave si tiene clase
-                            c_val.fill = PatternFill(start_color="EFF6FF", end_color="EFF6FF", fill_type="solid")
+                            ses = coincidentes[0]
+                            modal_txt = " [MT]" if ses.get('modalidad') == 'Mediación Tecnológica' else ""
+                            txt = (
+                                f"{ses['materia_nombre']} ({ses['hora_inicio']} - {ses['hora_fin']})\n"
+                                f"Prof: {ses['profesor_nombre']}\n"
+                                f"Aula: {ses['salon_id']}{modal_txt}"
+                            )
+                            col_data[col_idx][fila_actual] = (ses['asignacion_id'], txt)
                         else:
-                            c_val.value = ""
-                            c_val.font = font_celda
+                            col_data[col_idx][fila_actual] = None
 
-                    ws.row_dimensions[fila_actual].height = 42
                     fila_actual += 1
 
+                fila_fin_dia = fila_actual - 1
+
+                # Combinar verticalmente las celdas continuas de la misma clase por columna
+                for col_idx in range(3, 3 + len(lista_grupos)):
+                    r_ptr = fila_inicio_dia
+                    while r_ptr <= fila_fin_dia:
+                        info = col_data[col_idx].get(r_ptr)
+                        if info is None:
+                            c = ws.cell(row=r_ptr, column=col_idx, value="")
+                            c.border = border_box
+                            c.font = font_celda
+                            r_ptr += 1
+                        else:
+                            asig_id, txt = info
+                            r_start = r_ptr
+                            while r_ptr + 1 <= fila_fin_dia and col_data[col_idx].get(r_ptr + 1) and col_data[col_idx][r_ptr + 1][0] == asig_id:
+                                r_ptr += 1
+                            r_end = r_ptr
+
+                            if r_end > r_start:
+                                ws.merge_cells(start_row=r_start, start_column=col_idx, end_row=r_end, end_column=col_idx)
+
+                            for row_cell in range(r_start, r_end + 1):
+                                cell_item = ws.cell(row=row_cell, column=col_idx)
+                                cell_item.border = border_box
+                                cell_item.fill = fill_clase
+
+                            top_cell = ws.cell(row=r_start, column=col_idx, value=txt)
+                            top_cell.font = font_celda
+                            top_cell.alignment = align_center
+
+                            r_ptr += 1
+
                 # Combinar celdas de la columna Día verticalmente para toda la jornada
-                ws.merge_cells(start_row=fila_inicio_dia, start_column=1, end_row=fila_actual - 1, end_column=1)
+                ws.merge_cells(start_row=fila_inicio_dia, start_column=1, end_row=fila_fin_dia, end_column=1)
                 c_dia = ws.cell(row=fila_inicio_dia, column=1, value=dia.upper())
                 c_dia.font = font_dia
                 c_dia.fill = fill_dia
                 c_dia.alignment = align_center
-                c_dia.border = border_box
+                for r_d in range(fila_inicio_dia, fila_fin_dia + 1):
+                    ws.cell(row=r_d, column=1).border = border_box
 
             # Autoajustar anchos de columna
             ws.column_dimensions['A'].width = 13
@@ -295,12 +329,7 @@ class GeneradorSabana:
         if not datos:
             return {"exito": False, "mensaje": "No se encontraron asignaciones para los filtros seleccionados."}
 
-        franjas = [
-            ("07:00", "08:00"), ("08:00", "09:00"), ("09:00", "10:00"),
-            ("10:00", "11:00"), ("11:00", "12:00"), ("12:00", "13:00"),
-            ("13:00", "14:00"), ("14:00", "15:00"), ("15:00", "16:00"),
-            ("16:00", "17:00")
-        ]
+        franjas = cls.FRANJAS_30MIN
 
         with PdfPages(ruta_archivo) as pdf:
             for sem_id, sem_data in sorted(datos.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 99):
@@ -309,45 +338,37 @@ class GeneradorSabana:
                 if not lista_grupos:
                     continue
 
-                # Dividir días en páginas para que la tabla sea perfectamente legible
-                # 2 días por página o 1 día por página según cantidad de grupos
-                dias_por_pagina = 1 if len(lista_grupos) > 4 else 2
-                chunk_dias = [cls.DIAS[i:i + dias_por_pagina] for i in range(0, len(cls.DIAS), dias_por_pagina)]
-
-                for lote_dias in chunk_dias:
-                    # Configurar figura horizontal landscape
-                    fig, ax = plt.subplots(figsize=(15, 9.5))
+                # 1 día por página en formato horizontal para perfecta legibilidad en 30 min
+                for dia in cls.DIAS:
+                    fig, ax = plt.subplots(figsize=(15, 10))
                     ax.axis('tight')
                     ax.axis('off')
 
                     columnas = ['Día', 'Horario'] + [f"Gpo {g}" for g in lista_grupos]
                     filas_tabla = []
 
-                    for dia in lote_dias:
-                        for h_ini_f, h_fin_f in franjas:
-                            f_ini_min = cls._hora_a_minutos(h_ini_f)
-                            f_fin_min = cls._hora_a_minutos(h_fin_f)
-                            fila = [dia, f"{h_ini_f}-{h_fin_f}"]
+                    for h_ini_f, h_fin_f in franjas:
+                        f_ini_min = cls._hora_a_minutos(h_ini_f)
+                        f_fin_min = cls._hora_a_minutos(h_fin_f)
+                        fila = [dia, f"{h_ini_f}-{h_fin_f}"]
 
-                            for g_id in lista_grupos:
-                                sesiones_grupo = grupos_dict.get(g_id, [])
-                                coincidentes = [
-                                    s for s in sesiones_grupo
-                                    if s['dia'] == dia and s['ini_min'] < f_fin_min and s['fin_min'] > f_ini_min
-                                ]
-                                if coincidentes:
-                                    s = coincidentes[0]
-                                    txt = f"{s['materia_nombre'][:22]}\n{s['profesor_nombre'][:20]}\nAula: {s['salon_id']}"
-                                    fila.append(txt)
-                                else:
-                                    fila.append("-")
-                            filas_tabla.append(fila)
+                        for g_id in lista_grupos:
+                            sesiones_grupo = grupos_dict.get(g_id, [])
+                            coincidentes = [
+                                s for s in sesiones_grupo
+                                if s['dia'] == dia and s['ini_min'] < f_fin_min and s['fin_min'] > f_ini_min
+                            ]
+                            if coincidentes:
+                                s = coincidentes[0]
+                                txt = f"{s['materia_nombre'][:20]} ({s['hora_inicio']}-{s['hora_fin']})\n{s['profesor_nombre'][:20]}\nAula: {s['salon_id']}"
+                                fila.append(txt)
+                            else:
+                                fila.append("-")
+                        filas_tabla.append(fila)
 
-                    # Crear tabla en matplotlib
-                    dias_tit = " y ".join(lote_dias)
                     periodo_txt = f" (Periodo {filtro_periodo})" if filtro_periodo else ""
                     ax.set_title(
-                        f"SÁBANA MATRICIAL CONSOLIDADA - SEMESTRE {sem_id}{periodo_txt} - {dias_tit}\n",
+                        f"SÁBANA MATRICIAL CONSOLIDADA - SEMESTRE {sem_id}{periodo_txt} - {dia.upper()}\n",
                         fontsize=13, fontweight='bold', pad=12
                     )
 
@@ -358,8 +379,8 @@ class GeneradorSabana:
                         cellLoc='center'
                     )
                     tab.auto_set_font_size(False)
-                    tab.set_fontsize(7.5)
-                    tab.scale(1.0, 1.8)
+                    tab.set_fontsize(7.0)
+                    tab.scale(1.0, 1.35)
 
                     # Estilar encabezados
                     for col_i in range(len(columnas)):

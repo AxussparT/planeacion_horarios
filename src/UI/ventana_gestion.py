@@ -969,10 +969,12 @@ class VentanaGestion:
                 return []
             cur, conn = ctx
             cur.execute("""
-                SELECT h.dia, h.hora_inicio, h.hora_fin, a.grupo_id, IFNULL(m.nombre, a.materia_id) AS materia
+                SELECT h.dia, h.hora_inicio, h.hora_fin, a.grupo_id, IFNULL(m.nombre, a.materia_id) AS materia,
+                       a.asignacion_id, a.profesor_id, IFNULL(p.nombre, 'Sin profesor') AS profesor_nombre
                 FROM horarios h
                 JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
                 LEFT JOIN materias m ON a.materia_id = m.materia_id
+                LEFT JOIN profesores p ON a.profesor_id = p.profesor_id
                 WHERE LOWER(h.salon_id) = LOWER(%s)
                   AND h.asignacion_id <> %s
                   AND (a.estado IS NULL OR a.estado != 'cancelada')
@@ -990,7 +992,10 @@ class VentanaGestion:
                                 "inicio": f['hora_inicio'],
                                 "fin": f['hora_fin'],
                                 "grupo_id": f['grupo_id'],
-                                "materia": f['materia']
+                                "materia": f['materia'],
+                                "asignacion_id": f.get('asignacion_id'),
+                                "profesor_id": f.get('profesor_id'),
+                                "profesor_nombre": f.get('profesor_nombre')
                             })
         return choques
 
@@ -1259,22 +1264,30 @@ class VentanaGestion:
         if min_hora - duracion_min >= 7 * 60:
             franjas_candidatas.append((min_hora - duracion_min, min_hora, True))
 
-        # Prioridad 3: Otras franjas del mismo bloque de días antes de 17:00
-        for h_ini in range(7 * 60, 17 * 60 - duracion_min + 1, 60):
-            h_fin = h_ini + duracion_min
-            if not any(f[0] == h_ini and f[1] == h_fin for f in franjas_candidatas):
-                franjas_candidatas.append((h_ini, h_fin, False))
+# Solo evaluar franjas continuas (clases corridas contiguas)
 
-        aulas_candidatas = []
-        if aula_actual and aula_actual not in ("Sin aula", ""):
-            aulas_candidatas.append(aula_actual)
-        with obtener_cursor() as ctx_a:
-            if ctx_a:
-                cur_a, _ = ctx_a
-                cur_a.execute("SELECT salon_id FROM salones WHERE salon_id NOT LIKE 'MEDIACION%' ORDER BY salon_id")
-                for r in cur_a.fetchall():
-                    if r[0] not in aulas_candidatas:
-                        aulas_candidatas.append(r[0])
+        if not aula_actual or aula_actual in ("Sin aula", ""):
+            return None
+        aula_objetivo = aula_actual
+
+        resumen_existentes = []
+        for d in dias_objetivo:
+            for c in dias_prof.get(d, []):
+                resumen_existentes.append(f"• {d} {c['hi']}-{c['hf']}: {c['materia']} (Grupo {c['grupo']}) en Aula {c['aula']}")
+
+        docentes_en_conflicto = set()
+
+        # Datos de la asignación original para evaluar swap si hay materia sin profesor
+        orig_hi = ""
+        orig_hf = ""
+        orig_dias_str = ""
+        orig_dias = []
+        asig_info_act = getattr(self, '_materias_grupo_cache', {}).get(str(asig_id), {})
+        if asig_info_act:
+            orig_hi = self._hora_db_a_str(asig_info_act.get('hora_inicio')) if asig_info_act.get('hora_inicio') else ""
+            orig_hf = self._hora_db_a_str(asig_info_act.get('hora_fin')) if asig_info_act.get('hora_fin') else ""
+            orig_dias_str = asig_info_act.get('dias') or ""
+            orig_dias = [d.strip() for d in orig_dias_str.split(',') if d.strip()]
 
         for h_ini, h_fin, es_continua in franjas_candidatas:
             hi_str = f"{h_ini // 60:02d}:{h_ini % 60:02d}"
@@ -1296,33 +1309,76 @@ class VentanaGestion:
             if ch_grupo:
                 continue
 
-            aula_elegida = None
-            for s_id in aulas_candidatas:
-                ch_aula = self._detectar_choques_aula(s_id, asig_id, dias_objetivo, hi_str, hf_str)
-                if not ch_aula:
-                    aula_elegida = s_id
-                    break
+            # Revisar choques en el aula_objetivo (exclusivamente en aula_actual, sin cambiar de salón)
+            ch_aula = self._detectar_choques_aula(aula_objetivo, asig_id, dias_objetivo, hi_str, hf_str)
+            if not ch_aula:
+                # El aula está completamente libre en este horario corrido
+                return {
+                    "encontrado": True,
+                    "dias": dias_objetivo,
+                    "dias_str": ", ".join(dias_objetivo),
+                    "hora_i": hi_str,
+                    "hora_f": hf_str,
+                    "salon": aula_objetivo,
+                    "es_continua": es_continua,
+                    "clases_actuales": resumen_existentes,
+                    "desplazamiento": None
+                }
+            else:
+                # El aula está ocupada. Comprobar si los ocupantes tienen profesor asignado
+                tiene_otro_prof = False
+                ocupantes_sin_prof = []
+                for c in ch_aula:
+                    p_id = c.get('profesor_id')
+                    p_nom = c.get('profesor_nombre', 'Sin profesor')
+                    if p_id and str(p_id).strip() != 'SIN_ASIGNAR' and str(p_id).strip() != str(prof_id):
+                        tiene_otro_prof = True
+                        if p_nom and p_nom != 'Sin profesor':
+                            docentes_en_conflicto.add(p_nom)
+                    else:
+                        ocupantes_sin_prof.append(c)
 
-            if not aula_elegida:
-                continue
+                if tiene_otro_prof:
+                    # Ocupado por otro profesor con clase asignada: NO desplazar para no afectarlo
+                    continue
 
-            resumen_existentes = []
-            for d in dias_objetivo:
-                for c in dias_prof.get(d, []):
-                    resumen_existentes.append(f"• {d} {c['hi']}-{c['hf']}: {c['materia']} (Grupo {c['grupo']}) en Aula {c['aula']}")
+                if ocupantes_sin_prof and orig_hi and orig_hf and orig_dias:
+                    # Desplazar la materia sin profesor al horario vacante en el mismo salón
+                    asig_disp = ocupantes_sin_prof[0]
+                    ch_grp_disp = self._detectar_choques_grupo(
+                        asig_disp['grupo_id'], asig_disp.get('materia', ''), orig_dias, orig_hi, orig_hf,
+                        excluir_asignacion_id=asig_id
+                    )
+                    if not ch_grp_disp:
+                        return {
+                            "encontrado": True,
+                            "dias": dias_objetivo,
+                            "dias_str": ", ".join(dias_objetivo),
+                            "hora_i": hi_str,
+                            "hora_f": hf_str,
+                            "salon": aula_objetivo,
+                            "es_continua": es_continua,
+                            "clases_actuales": resumen_existentes,
+                            "desplazamiento": {
+                                "asignacion_id": asig_disp.get('asignacion_id'),
+                                "materia_nombre": asig_disp.get('materia', 'Materia sin profesor'),
+                                "grupo_id": asig_disp['grupo_id'],
+                                "nuevo_hora_i": orig_hi,
+                                "nuevo_hora_f": orig_hf,
+                                "nuevos_dias": orig_dias,
+                                "nuevos_dias_str": orig_dias_str,
+                                "salon": aula_objetivo
+                            }
+                        }
 
-            return {
-                "encontrado": True,
-                "dias": dias_objetivo,
-                "dias_str": ", ".join(dias_objetivo),
-                "hora_i": hi_str,
-                "hora_f": hf_str,
-                "salon": aula_elegida,
-                "es_continua": es_continua,
-                "clases_actuales": resumen_existentes
-            }
-
-        return None
+        # No fue posible el acomodo en el salón sin afectar a otros profesores
+        txt_prof = f" (horario ocupado por: {', '.join(sorted(docentes_en_conflicto))})" if docentes_en_conflicto else ""
+        return {
+            "encontrado": False,
+            "motivo": "sin_lugar_en_aula",
+            "salon": aula_objetivo,
+            "mensaje": f"No fue posible compactar la jornada en horario contiguo en el aula '{aula_objetivo}' sin afectar los horarios de otros profesores asignados{txt_prof}."
+        }
 
     def _mostrar_dialogo_sugerencia_compactacion(self, asig_info, prof_nombre, compactacion):
         """
@@ -1389,9 +1445,27 @@ class VentanaGestion:
         ttk.Label(f_grid, text="Propuesta Compactada:", background='#0A0F1E', foreground='#B0BEC5', font=self._fuente_sub).grid(row=1, column=0, sticky='w', pady=2)
         ttk.Label(f_grid, text=h_sug, background='#0A0F1E', foreground='#A5D6A7', font=self._fuente_btn).grid(row=1, column=1, sticky='w', padx=8, pady=2)
 
+        desp = compactacion.get('desplazamiento')
+        if desp:
+            f_desp = ttk.LabelFrame(f_cont, text="Reacomodo Interno (Mismo Salón)", style='blue.TFrame')
+            f_desp.pack(fill='x', pady=4)
+            txt_desp = (
+                f"• Para habilitar este horario corrido, la materia '{desp['materia_nombre']}' (Grupo {desp['grupo_id']}),\n"
+                f"  que no tiene profesor asignado, se reubicará al horario {desp['nuevo_hora_i']} a {desp['nuevo_hora_f']} [{desp['nuevos_dias_str']}]\n"
+                f"  dentro del mismo salón {desp['salon']}."
+            )
+            ttk.Label(
+                f_desp,
+                text=txt_desp,
+                background='#0A0F1E',
+                foreground='#FFE082',
+                font=self._fuente_sub,
+                justify='left'
+            ).pack(anchor='w', padx=10, pady=4)
+
         ttk.Label(
             f_cont,
-            text="✔ Concentra la asistencia del profesor en 2 días.\n✔ Clases corridas sin horas libres intermedias.\n✔ Verificado: Sin conflicto de aula ni de grupo.",
+            text=f"✔ Concentra la asistencia del profesor en 2 días.\n✔ Clases corridas sin horas libres intermedias.\n✔ Aula conservada: {compactacion['salon']}.\n✔ Sin afectar a ningún otro profesor.",
             background='#0A0F1E',
             foreground='#81C784',
             font=self._fuente_label,
@@ -1520,18 +1594,48 @@ class VentanaGestion:
                         # Cancelar vinculación
                         return
                     elif resp_comp is True:
-                        # Aplicar compactación sugerida directamente
+                        # Aplicar compactación sugerida directamente (en el mismo salón)
                         hora_i = compactacion['hora_i']
                         hora_f = compactacion['hora_f']
                         dias_lista = compactacion['dias']
                         dias_str = compactacion['dias_str']
                         aula_sel = compactacion['salon']
+
+                        # Si hubo materia desplazada sin profesor, aplicar su reubicación en BD
+                        desp = compactacion.get('desplazamiento')
+                        if desp and desp.get('asignacion_id'):
+                            try:
+                                with obtener_cursor() as ctx_desp:
+                                    if ctx_desp:
+                                        cur_d, conn_d = ctx_desp
+                                        cur_d.execute("""
+                                            UPDATE asignaciones
+                                            SET hora_inicio = %s, hora_fin = %s, dias = %s
+                                            WHERE asignacion_id = %s
+                                        """, (desp['nuevo_hora_i'], desp['nuevo_hora_f'], desp['nuevos_dias_str'], desp['asignacion_id']))
+                                        cur_d.execute("DELETE FROM horarios WHERE asignacion_id = %s", (desp['asignacion_id'],))
+                                        for d_dia in desp['nuevos_dias']:
+                                            cur_d.execute("""
+                                                INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin)
+                                                VALUES (%s, %s, %s, %s, %s)
+                                            """, (desp['asignacion_id'], desp['salon'], d_dia, desp['nuevo_hora_i'], desp['nuevo_hora_f']))
+                                        conn_d.commit()
+                            except Exception as e_desp:
+                                print(f"Error aplicando desplazamiento de materia sin profesor: {e_desp}")
+
                         self._aplicar_vinculacion_docente(
                             asig_id, prof_id, estado='asignado', modalidad=modalidad,
                             hora_i=hora_i, hora_f=hora_f, dias_str=dias_str, dias_lista=dias_lista,
                             aula_sel=aula_sel
                         )
                         return
+            elif compactacion and not compactacion.get("encontrado") and compactacion.get("motivo") == "sin_lugar_en_aula":
+                messagebox.showinfo(
+                    "Aviso de Jornada Docente",
+                    f"El profesor {prof_nombre} ya cuenta con clases asignadas.\n\n"
+                    f"{compactacion['mensaje']}\n\n"
+                    f"Se conservará el salón '{aula_sel}' y su horario preasignado ({self._hora_db_a_str(hora_i)} a {self._hora_db_a_str(hora_f)})."
+                )
 
         # 1. Comprobar si el profesor ya tiene esa misma asignación
         if asig_info.get('profesor_id') == prof_id and asig_info.get('modalidad') == modalidad and not getattr(self, '_horario_manual_visible', False):
