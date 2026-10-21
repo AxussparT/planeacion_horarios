@@ -81,15 +81,19 @@ class GeneradorPreasignacion:
             return
         cur = conn.cursor()
         cur.execute("SELECT salon_id, capacidad, tipo FROM salones ORDER BY salon_id")
+        seen_upper = set()
         for row in cur.fetchall():
-            s_id = str(row[0])
+            s_id = str(row[0]).strip()
             if s_id.upper().startswith("MEDIACION_TECNOLOGICA"):
                 continue
+            if s_id.upper() in seen_upper:
+                continue
+            seen_upper.add(s_id.upper())
             tipo_val = row[2] if len(row) > 2 and row[2] is not None else 'Normal'
             t = str(tipo_val).strip().upper()
             if t in ('NORMAL',):
                 self.salones_normales.append(s_id)
-            elif t in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN'):
+            elif t in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN') or 'TECNOL' in t:
                 self.salones_computo.append(s_id)
             else:
                 self.salones_otros.setdefault(t, []).append(s_id)
@@ -530,6 +534,264 @@ class GeneradorPreasignacion:
                 dur = max(1, slot_f - slot_i)
                 self._registrar_bloque(s_id, g_id, dia, slot_i, dur)
 
+    def preasignar_grupo(self, grupo_id, salon_fijo=None):
+        """
+        Preasigna un grupo individual registrado en `grupos` y `grupo_materias`.
+        Asigna salón base (tipo Normal), laboratorio de cómputo si aplica, y horarios simétricos.
+        Crea las filas en `asignaciones` con profesor 'SIN_ASIGNAR' y estado 'no asignado',
+        y sus sesiones correspondientes en `horarios`.
+        """
+        self._asegurar_profesor_sin_asignar()
+        self.cargar_salones()
+
+        if not self.salones_normales:
+            return {"exito": False, "mensaje": "No hay salones de tipo Normal registrados en el sistema."}
+
+        with obtener_cursor() as ctx:
+            if not ctx:
+                return {"exito": False, "mensaje": "No se pudo conectar a la base de datos."}
+            cur, conn = ctx
+
+            # 1. Obtener nivel del grupo
+            cur.execute("SELECT nivel FROM grupos WHERE grupo_id = %s", (grupo_id,))
+            g_row = cur.fetchone()
+            if not g_row:
+                return {"exito": False, "mensaje": f"El grupo '{grupo_id}' no existe en la base de datos."}
+            nivel_num = 1
+            try:
+                nivel_num = int(g_row[0])
+            except (ValueError, TypeError):
+                pass
+            periodo = 'A' if nivel_num in (2, 4, 6, 8, 10) else 'B'
+
+            # 2. Consultar materias vinculadas en grupo_materias
+            cur.execute("""
+                SELECT m.materia_id, m.nombre, IFNULL(m.horas_semana, 4.0), IFNULL(m.tipo, 'Normal')
+                FROM grupo_materias gm
+                JOIN materias m ON gm.materia_id = m.materia_id
+                WHERE gm.grupo_id = %s
+                ORDER BY m.tipo, m.materia_id
+            """, (grupo_id,))
+            mats_raw = cur.fetchall()
+            if not mats_raw:
+                return {"exito": False, "mensaje": f"El grupo '{grupo_id}' no tiene materias vinculadas en 'Grupos'."}
+
+            materias = []
+            for r in mats_raw:
+                materias.append({
+                    'materia_id': str(r[0]),
+                    'nombre': str(r[1]),
+                    'horas_semana': float(r[2] or 4.0),
+                    'tipo': str(r[3] or 'NORMAL').strip().upper()
+                })
+
+            # 3. Cargar ocupación actual excluyendo este grupo
+            self.cargar_ocupacion_existente(excluir_grupo_id=grupo_id)
+
+            # 4. Determinar salón base y turno
+            salon_base = salon_fijo
+            shift_morning = True
+
+            if not salon_base:
+                cur.execute("""
+                    SELECT DISTINCT h.salon_id
+                    FROM horarios h
+                    JOIN asignaciones a ON h.asignacion_id = a.asignacion_id
+                    WHERE a.grupo_id = %s AND h.salon_id NOT LIKE 'MEDIACION%'
+                """, (grupo_id,))
+                prev_salones = [r[0] for r in cur.fetchall() if r[0] in self.salones_normales]
+                if prev_salones:
+                    salon_base = prev_salones[0]
+
+            if not salon_base:
+                mejor_salon = None
+                mejor_shift = True
+                mejor_huecos = -1
+
+                for s_id in self.salones_normales:
+                    ocup_manana = sum(1 for d in self.DIAS_SEMANA for slot in range(0, 12) if self.ocupacion_salones.get((s_id, d, slot)))
+                    ocup_tarde = sum(1 for d in self.DIAS_SEMANA for slot in range(12, 20) if self.ocupacion_salones.get((s_id, d, slot)))
+
+                    if ocup_manana == 0:
+                        mejor_salon = s_id
+                        mejor_shift = True
+                        break
+                    elif ocup_tarde == 0:
+                        mejor_salon = s_id
+                        mejor_shift = False
+                        break
+                    else:
+                        huecos_m = (len(self.DIAS_SEMANA) * 12) - ocup_manana
+                        huecos_t = (len(self.DIAS_SEMANA) * 8) - ocup_tarde
+                        if huecos_m > mejor_huecos:
+                            mejor_huecos = huecos_m
+                            mejor_salon = s_id
+                            mejor_shift = True
+                        if huecos_t > mejor_huecos:
+                            mejor_huecos = huecos_t
+                            mejor_salon = s_id
+                            mejor_shift = False
+
+                salon_base = mejor_salon or self.salones_normales[0]
+                shift_morning = mejor_shift
+
+            lab_computo = self.salones_computo[0] if self.salones_computo else salon_base
+
+            slot_min = 0 if shift_morning else 12
+            slot_max = 12 if shift_morning else 20
+
+            # 5. Planificar asignación horaria de cada materia
+            solucion = []
+            for mat in materias:
+                m_id = mat['materia_id']
+                m_nom = mat['nombre']
+                m_tipo = mat['tipo']
+                h_sem = mat['horas_semana']
+
+                if m_tipo in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN') or 'TECNOL' in m_tipo:
+                    salon_obj = lab_computo
+                elif m_tipo == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
+                    salon_obj = self.salones_otros['AUDITORIO'][0]
+                elif m_tipo == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
+                    salon_obj = self.salones_otros['LABORATORIO'][0]
+                else:
+                    salon_obj = salon_base
+
+                estrategias = self._generar_estrategias(h_sem)
+                materia_asignada = False
+                sesiones_asignadas = []
+
+                duracion_max = max(bloques for _, bloques in estrategias[0])
+                for estrategia in estrategias:
+                    rango_slots = list(range(slot_min, slot_max - duracion_max + 1))
+                    for slot_prueba in rango_slots:
+                        posible_todos = True
+                        for dia, duracion in estrategia:
+                            if not self._es_posible_bloque(salon_obj, grupo_id, dia, slot_prueba, duracion):
+                                posible_todos = False
+                                break
+                        if posible_todos:
+                            for dia, duracion in estrategia:
+                                self._registrar_bloque(salon_obj, grupo_id, dia, slot_prueba, duracion)
+                                sesiones_asignadas.append({
+                                    "dia": dia,
+                                    "hora_inicio": self.slot_a_hora(slot_prueba),
+                                    "hora_fin": self.slot_a_hora(slot_prueba + duracion),
+                                    "salon_id": salon_obj
+                                })
+                            materia_asignada = True
+                            break
+                    if materia_asignada:
+                        break
+
+                if not materia_asignada:
+                    for estrategia in estrategias:
+                        ses_temp = []
+                        exito_temp = True
+                        for dia, duracion in estrategia:
+                            enc = False
+                            for sp in range(0, 20 - duracion + 1):
+                                if self._es_posible_bloque(salon_obj, grupo_id, dia, sp, duracion):
+                                    ses_temp.append({
+                                        "dia": dia,
+                                        "hora_inicio": self.slot_a_hora(sp),
+                                        "hora_fin": self.slot_a_hora(sp + duracion),
+                                        "salon_id": salon_obj,
+                                        "slot": sp,
+                                        "duracion": duracion
+                                    })
+                                    enc = True
+                                    break
+                            if not enc:
+                                exito_temp = False
+                                break
+                        if exito_temp:
+                            for st in ses_temp:
+                                self._registrar_bloque(st['salon_id'], grupo_id, st['dia'], st['slot'], st['duracion'])
+                                sesiones_asignadas.append({
+                                    "dia": st['dia'],
+                                    "hora_inicio": st['hora_inicio'],
+                                    "hora_fin": st['hora_fin'],
+                                    "salon_id": st['salon_id']
+                                })
+                            materia_asignada = True
+                            break
+
+                if materia_asignada and sesiones_asignadas:
+                    dias_str = ",".join(s['dia'] for s in sesiones_asignadas)
+                    hi_ref = min(s['hora_inicio'] for s in sesiones_asignadas)
+                    hf_ref = max(s['hora_fin'] for s in sesiones_asignadas)
+                    solucion.append({
+                        "materia_id": m_id,
+                        "materia_nombre": m_nom,
+                        "periodo": periodo,
+                        "hora_inicio": hi_ref,
+                        "hora_fin": hf_ref,
+                        "dias": dias_str,
+                        "sesiones": sesiones_asignadas
+                    })
+
+            # 6. Sincronizar y persistir en la base de datos
+            try:
+                # Limpiar materias obsoletas que ya no estén en grupo_materias para este grupo
+                cur.execute("""
+                    DELETE FROM horarios WHERE asignacion_id IN (
+                        SELECT asignacion_id FROM asignaciones
+                        WHERE grupo_id = %s AND materia_id NOT IN (
+                            SELECT materia_id FROM grupo_materias WHERE grupo_id = %s
+                        )
+                    )
+                """, (grupo_id, grupo_id))
+                cur.execute("""
+                    DELETE FROM asignaciones
+                    WHERE grupo_id = %s AND materia_id NOT IN (
+                        SELECT materia_id FROM grupo_materias WHERE grupo_id = %s
+                    )
+                """, (grupo_id, grupo_id))
+
+                for asig in solucion:
+                    m_id = asig['materia_id']
+                    cur.execute(
+                        "SELECT asignacion_id FROM asignaciones WHERE grupo_id = %s AND materia_id = %s",
+                        (grupo_id, m_id)
+                    )
+                    existente = cur.fetchone()
+                    if existente:
+                        asig_id = existente[0]
+                        cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (asig_id,))
+                        cur.execute("""
+                            UPDATE asignaciones
+                            SET profesor_id = 'SIN_ASIGNAR', periodo = %s, hora_inicio = %s,
+                                hora_fin = %s, dias = %s, modalidad = 'Presencial', estado = 'no asignado'
+                            WHERE asignacion_id = %s
+                        """, (asig['periodo'], asig['hora_inicio'], asig['hora_fin'], asig['dias'], asig_id))
+                    else:
+                        cur.execute("""
+                            INSERT INTO asignaciones
+                                (profesor_id, materia_id, grupo_id, periodo, hora_inicio, hora_fin, dias, modalidad, estado)
+                            VALUES
+                                ('SIN_ASIGNAR', %s, %s, %s, %s, %s, %s, 'Presencial', 'no asignado')
+                        """, (m_id, grupo_id, asig['periodo'], asig['hora_inicio'], asig['hora_fin'], asig['dias']))
+                        asig_id = cur.lastrowid
+
+                    for ses in asig['sesiones']:
+                        cur.execute("""
+                            INSERT INTO horarios (asignacion_id, salon_id, dia, hora_inicio, hora_fin)
+                            VALUES (%s, %s, %s, %s, %s)
+                        """, (asig_id, ses['salon_id'], ses['dia'], ses['hora_inicio'], ses['hora_fin']))
+
+                conn.commit()
+            except sqlite3.Error as err:
+                conn.rollback()
+                return {"exito": False, "mensaje": f"Error persistiendo la preasignación: {err}"}
+
+            return {
+                "exito": True,
+                "mensaje": f"Grupo '{grupo_id}' preasignado exitosamente en aula {salon_base} ({len(solucion)} materias).",
+                "salon_base": salon_base,
+                "materias_asignadas": len(solucion)
+            }
+
     def reacomodar_grupo(self, grupo_id, modo="todo", materias_ids=None):
         """
         Reasigna las materias de un grupo manteniendo su salón actual pero en otro orden.
@@ -569,7 +831,11 @@ class GeneradorPreasignacion:
             filas = cur.fetchall()
 
             if not filas:
-                return {"exito": False, "mensaje": f"El grupo '{grupo_id}' no tiene asignaciones registradas."}
+                cur.execute("SELECT COUNT(*) FROM grupo_materias WHERE grupo_id = %s", (grupo_id,))
+                cnt_mats = cur.fetchone()[0]
+                if cnt_mats > 0:
+                    return self.preasignar_grupo(grupo_id)
+                return {"exito": False, "mensaje": f"El grupo '{grupo_id}' no tiene asignaciones ni materias vinculadas."}
 
             # 2. Identificar el salón base del grupo y su franja horaria
             salon_base = None

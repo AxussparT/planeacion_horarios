@@ -268,8 +268,10 @@ class VentanaGestion:
         self.combo_filtro_semestre.bind("<<ComboboxSelected>>", self._cambiar_filtro_semestre)
 
         ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=15)
-        btn_asignar = ttk.Button(frame_filtros, text="Iniciar Asignaciones de Aula", command=self.iniciar_asignacion_automatica)
-        btn_asignar.pack(side='left', padx=5)
+        btn_preasig_todas = ttk.Button(frame_filtros, text="🏢 Preasignar Todas las Aulas", command=self._preasignar_todas_aulas)
+        btn_preasig_todas.pack(side='left', padx=3)
+        btn_asignar = ttk.Button(frame_filtros, text="👨‍🏫 Asignar Profesores Automático", command=self.iniciar_asignacion_automatica)
+        btn_asignar.pack(side='left', padx=3)
         ttk.Separator(frame_filtros, orient='vertical').pack(side='left', fill='y', padx=8)
         ttk.Button(frame_filtros, text="Guardar Config", command=self._guardar_configuracion).pack(side='left', padx=2)
         ttk.Button(frame_filtros, text="Actualizar Config", command=self._actualizar_configuracion).pack(side='left', padx=2)
@@ -758,6 +760,36 @@ class VentanaGestion:
                 ORDER BY a.materia_id
             """, (grupo_id,))
             filas = cur.fetchall()
+
+        if not filas:
+            # Si no hay registros en 'asignaciones', consultar si el grupo tiene materias en 'grupo_materias'
+            filas_gm = []
+            with obtener_cursor() as ctx:
+                if ctx:
+                    cur, conn = ctx
+                    cur.execute("""
+                        SELECT gm.materia_id, m.nombre
+                        FROM grupo_materias gm
+                        JOIN materias m ON gm.materia_id = m.materia_id
+                        WHERE gm.grupo_id = %s
+                        ORDER BY m.materia_id
+                    """, (grupo_id,))
+                    filas_gm = cur.fetchall()
+
+            if filas_gm:
+                self._materias_grupo_cache = {}
+                for fgm in filas_gm:
+                    m_id, m_nom = fgm
+                    item_id = f"gm_{m_id}"
+                    self.tabla_materias_grupo.insert(
+                        '', 'end', iid=item_id,
+                        values=(f"{m_id} - {m_nom}", "Sin preasignar", "Presencial", "Pendiente", "Pendiente", "Sin profesor", "NO PREASIGNADO")
+                    )
+                self._lbl_info_grupo_gestion.config(
+                    text=f"Grupo: {grupo_id} | {len(filas_gm)} materias sin preasignar. Presiona '⚡ Volver a preasignar' para asignar aula y horarios."
+                )
+                self._actualizar_estado_boton_vinculo()
+                return
 
         self._materias_grupo_cache = {}
         total_asignadas = 0
@@ -3386,6 +3418,36 @@ class VentanaGestion:
         
         self.asignacion_seleccionada_id = item
 
+    def _preasignar_todas_aulas(self):
+        """
+        Ejecuta la preasignación general de aulas y horarios para todos los grupos registrados.
+        """
+        if not messagebox.askyesno(
+            "Preasignación General de Aulas",
+            "¿Desea ejecutar la preasignación automática de aulas y horarios para todos los grupos registrados?\n\n"
+            "Esto asignará salones y horarios optimizados a las materias de cada grupo (sin profesor asignado) "
+            "respetando el límite de 2 grupos por aula estándar (o hasta 3 si son reducidos).\n\n"
+            "¿Continuar?"
+        ):
+            return
+
+        from src.motor_preasignacion import GeneradorPreasignacion
+        motor = GeneradorPreasignacion()
+        res = motor.ejecutar()
+        if res.get("exito"):
+            messagebox.showinfo(
+                "Preasignación Exitosa",
+                f"Se preasignaron exitosamente {res.get('materias_asignadas', 0)} materias en {len(res.get('salones_utilizados', []))} salones "
+                f"para {res.get('total_grupos', 0)} grupos."
+            )
+            self.actualizar_vista_previa()
+            self._cargar_materias_grupo_gestion()
+        else:
+            messagebox.showerror(
+                "Error en Preasignación",
+                res.get("mensaje", "Ocurrió un error en la preasignación.")
+            )
+
     def iniciar_asignacion_automatica(self):
         respuesta = messagebox.askyesnocancel(
             "Tipo de Asignación", 
@@ -4188,8 +4250,13 @@ class VentanaGestion:
                 params = []
 
                 if estado_filtro != "Todos":
-                    sql += " AND a.estado = %s"
-                    params.append(estado_filtro)
+                    if estado_filtro == "pendiente":
+                        sql += " AND (a.estado = 'pendiente' OR a.estado = 'no asignado' OR a.profesor_id = 'SIN_ASIGNAR' OR a.profesor_id IS NULL)"
+                    elif estado_filtro == "asignado":
+                        sql += " AND a.estado = 'asignado' AND a.profesor_id != 'SIN_ASIGNAR' AND a.profesor_id IS NOT NULL"
+                    else:
+                        sql += " AND a.estado = %s"
+                        params.append(estado_filtro)
 
                 if texto_busqueda:
                     sql += " AND (p.nombre LIKE %s OR m.nombre LIKE %s OR a.profesor_id LIKE %s OR a.materia_id LIKE %s)"
@@ -4838,11 +4905,42 @@ class VentanaGestion:
                 materias_grupo = cur.fetchall()
 
         if not materias_grupo:
-            messagebox.showwarning(
-                "Sin Materias",
-                f"El grupo '{grupo_id}' no tiene materias preasignadas registradas actualmente."
-            )
-            return
+            # Comprobar si tiene materias en grupo_materias pendientes de preasignar
+            materias_gm = []
+            with obtener_cursor() as ctx:
+                if ctx:
+                    cur, conn = ctx
+                    cur.execute("""
+                        SELECT gm.materia_id, m.nombre
+                        FROM grupo_materias gm
+                        JOIN materias m ON gm.materia_id = m.materia_id
+                        WHERE gm.grupo_id = %s
+                        ORDER BY m.materia_id
+                    """, (grupo_id,))
+                    materias_gm = cur.fetchall()
+
+            if materias_gm:
+                if messagebox.askyesno(
+                    "Preasignar Grupo",
+                    f"El grupo '{grupo_id}' tiene {len(materias_gm)} materias registradas pero aún no tiene aula ni horarios preasignados.\n\n"
+                    "¿Desea preasignar el aula y los horarios para este grupo ahora?"
+                ):
+                    from src.motor_preasignacion import GeneradorPreasignacion
+                    motor = GeneradorPreasignacion()
+                    res = motor.preasignar_grupo(grupo_id)
+                    if res.get("exito"):
+                        messagebox.showinfo("Preasignación Exitosa", res.get("mensaje", "Grupo preasignado correctamente."))
+                        self.actualizar_vista_previa()
+                        self._cargar_materias_grupo_gestion()
+                    else:
+                        messagebox.showerror("Error de Preasignación", res.get("mensaje", "No se pudo preasignar el grupo."))
+                return
+            else:
+                messagebox.showwarning(
+                    "Sin Materias",
+                    f"El grupo '{grupo_id}' no tiene materias vinculadas en 'Grupos'. Registre materias para este grupo primero."
+                )
+                return
 
         dialogo = tk.Toplevel(self.ventana)
         dialogo.title("Volver a acomodar materias del grupo")

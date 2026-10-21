@@ -1350,6 +1350,16 @@ class VentanaPrincipal:
 
         registro = grupo(g, n, materias=[m[0] for m in seleccionadas])
         if registro.exito:
+            # Preasignar aula y horarios automáticamente para que esté disponible de inmediato en todas las vistas
+            try:
+                from src.motor_preasignacion import GeneradorPreasignacion
+                motor = GeneradorPreasignacion()
+                res_pre = motor.preasignar_grupo(g)
+                if res_pre.get('exito'):
+                    print(f"[PREASIGNACION AUTO] {res_pre.get('mensaje')}")
+            except Exception as e:
+                print(f"[PREASIGNACION AUTO ERROR] {e}")
+
             self.limpiar_campos_grupo()
             self._refresh_all()
 
