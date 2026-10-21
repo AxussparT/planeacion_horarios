@@ -3522,27 +3522,123 @@ class VentanaGestion:
         
         self.asignacion_seleccionada_id = item
 
+    def _mostrar_dialogo_modo_preasignacion(self):
+        """
+        Muestra un diálogo de confirmación para elegir si se preasignan
+        todos los grupos o solo los grupos que aún no tienen aula asignada.
+        Retorna 'sin_aula', 'todos', o None (cancelar).
+        """
+        seleccion = [None]
+
+        dialogo = tk.Toplevel(self.ventana)
+        dialogo.title("Preasignación de Aulas y Horarios")
+        dialogo.transient(self.ventana)
+        dialogo.grab_set()
+        dialogo.configure(background='#0A0F1E')
+        dialogo.geometry("540x360")
+        dialogo.resizable(False, False)
+
+        f_cont = ttk.Frame(dialogo, style='blue.TFrame')
+        f_cont.pack(fill='both', expand=True, padx=20, pady=16)
+
+        ttk.Label(
+            f_cont,
+            text="🏢 Preasignación de Aulas y Horarios",
+            background='#0A0F1E',
+            foreground='#38BDF8',
+            font=self._fuente_titulo
+        ).pack(anchor='w', pady=(0, 6))
+
+        ttk.Label(
+            f_cont,
+            text="¿Qué grupos desea preasignar?",
+            background='#0A0F1E',
+            foreground='#FFFFFF',
+            font=self._fuente_sub
+        ).pack(anchor='w', pady=(0, 10))
+
+        # Opción 1: Solo grupos sin aula (Recomendado)
+        f_op1 = ttk.LabelFrame(f_cont, text="Opción Recomendada", style='blue.TFrame')
+        f_op1.pack(fill='x', pady=6)
+
+        def _sel_sin_aula():
+            seleccion[0] = "sin_aula"
+            dialogo.destroy()
+
+        ttk.Button(
+            f_op1,
+            text="⚡ Solo grupos que no tienen aula aún",
+            command=_sel_sin_aula
+        ).pack(anchor='w', padx=10, pady=(6, 2))
+
+        ttk.Label(
+            f_op1,
+            text="• Conserva intactos los grupos y materias ya asignadas a profesores.\n• Solo asigna salón y horarios a los grupos pendientes.",
+            background='#0A0F1E',
+            foreground='#81C784',
+            font=self._fuente_label,
+            justify='left'
+        ).pack(anchor='w', padx=10, pady=(0, 6))
+
+        # Opción 2: Todos los grupos
+        f_op2 = ttk.LabelFrame(f_cont, text="Reasignación Total", style='blue.TFrame')
+        f_op2.pack(fill='x', pady=6)
+
+        def _sel_todos():
+            if messagebox.askyesno(
+                "Confirmar Reasignación Total",
+                "¿Estás seguro de querer preasignar TODOS los grupos registrados?\n\n"
+                "Se reorganizarán los salones y horarios para toda la institución.\n\n"
+                "¿Deseas continuar?"
+            ):
+                seleccion[0] = "todos"
+                dialogo.destroy()
+
+        ttk.Button(
+            f_op2,
+            text="🔄 Todos los grupos registrados",
+            command=_sel_todos
+        ).pack(anchor='w', padx=10, pady=(6, 2))
+
+        ttk.Label(
+            f_op2,
+            text="• Vuelve a distribuir las aulas y horarios de todos los grupos desde cero.\n• Mantendrá las vinculaciones docentes siempre que sea compatible.",
+            background='#0A0F1E',
+            foreground='#FFB74D',
+            font=self._fuente_label,
+            justify='left'
+        ).pack(anchor='w', padx=10, pady=(0, 6))
+
+        # Botón cancelar
+        f_btn = ttk.Frame(f_cont, style='blue.TFrame')
+        f_btn.pack(fill='x', side='bottom', pady=(10, 0))
+
+        def _cancelar():
+            seleccion[0] = None
+            dialogo.destroy()
+
+        ttk.Button(f_btn, text="Cancelar", command=_cancelar).pack(side='right', padx=4)
+
+        dialogo.wait_window()
+        return seleccion[0]
+
     def _preasignar_todas_aulas(self):
         """
-        Ejecuta la preasignación general de aulas y horarios para todos los grupos registrados.
+        Ejecuta la preasignación de aulas y horarios según la selección del usuario.
         """
-        if not messagebox.askyesno(
-            "Preasignación General de Aulas",
-            "¿Desea ejecutar la preasignación automática de aulas y horarios para todos los grupos registrados?\n\n"
-            "Esto asignará salones y horarios optimizados a las materias de cada grupo (sin profesor asignado) "
-            "respetando el límite de 2 grupos por aula estándar (o hasta 3 si son reducidos).\n\n"
-            "¿Continuar?"
-        ):
+        modo = self._mostrar_dialogo_modo_preasignacion()
+        if not modo:
             return
+
+        solo_sin_aula = (modo == "sin_aula")
 
         from src.motor_preasignacion import GeneradorPreasignacion
         motor = GeneradorPreasignacion()
-        res = motor.ejecutar()
+        res = motor.ejecutar(solo_sin_aula=solo_sin_aula)
         if res.get("exito"):
             messagebox.showinfo(
                 "Preasignación Exitosa",
-                f"Se preasignaron exitosamente {res.get('materias_asignadas', 0)} materias en {len(res.get('salones_utilizados', []))} salones "
-                f"para {res.get('total_grupos', 0)} grupos."
+                res.get("mensaje", f"Se preasignaron exitosamente {res.get('materias_asignadas', 0)} materias.")
             )
             self.actualizar_vista_previa()
             self._cargar_materias_grupo_gestion()

@@ -225,7 +225,7 @@ class GeneradorPreasignacion:
 
         return estrategias
 
-    def ejecutar(self, filtro_periodo=None, filtro_semestre=None):
+    def ejecutar(self, filtro_periodo=None, filtro_semestre=None, solo_sin_aula=False, conservar_profesores=True):
         self._asegurar_profesor_sin_asignar()
         self.cargar_salones()
         self.ocupacion_salones.clear()
@@ -242,6 +242,68 @@ class GeneradorPreasignacion:
             return {
                 "exito": False,
                 "mensaje": "No hay salones de tipo Normal registrados en el sistema."
+            }
+
+        # Modo: Solo grupos que aún no tienen aula asignada
+        if solo_sin_aula:
+            grupos_con_aula = set()
+            with obtener_cursor() as ctx_a:
+                if ctx_a:
+                    cur_a, _ = ctx_a
+                    cur_a.execute("""
+                        SELECT DISTINCT a.grupo_id
+                        FROM asignaciones a
+                        JOIN horarios h ON a.asignacion_id = h.asignacion_id
+                        WHERE h.salon_id IS NOT NULL 
+                          AND h.salon_id != 'Sin aula'
+                          AND (a.estado IS NULL OR a.estado != 'cancelada')
+                    """ )
+                    for r in cur_a.fetchall():
+                        grupos_con_aula.add(str(r[0]))
+
+            grupos_pendientes = [g for g in grupos if str(g['grupo_id']) not in grupos_con_aula]
+
+            if not grupos_pendientes:
+                return {
+                    "exito": True,
+                    "total_grupos": 0,
+                    "materias_asignadas": 0,
+                    "horarios_generados": 0,
+                    "salones_utilizados": [],
+                    "resumen_grupos": ["Todos los grupos registrados ya cuentan con aula y horarios preasignados."],
+                    "alertas": [],
+                    "mensaje": "Todos los grupos registrados ya tienen aula asignada. No se modificó ningún horario ni profesor existente."
+                }
+
+            tot_materias = 0
+            tot_horarios = 0
+            salones_usados = set()
+            resumen_res = []
+            alertas_res = []
+
+            for g_item in grupos_pendientes:
+                gid = g_item['grupo_id']
+                res_g = self.preasignar_grupo(gid)
+                if res_g.get("exito"):
+                    m_asig = res_g.get("materias_asignadas", 0)
+                    tot_materias += m_asig
+                    tot_horarios += m_asig * 2
+                    s_base = res_g.get("salon_base")
+                    if s_base:
+                        salones_usados.add(s_base)
+                    resumen_res.append(f"• Grupo {gid}: Aula {s_base} ({m_asig} materias)")
+                else:
+                    alertas_res.append(f"Grupo {gid}: {res_g.get('mensaje')}")
+
+            return {
+                "exito": True,
+                "total_grupos": len(grupos_pendientes),
+                "materias_asignadas": tot_materias,
+                "horarios_generados": tot_horarios,
+                "salones_utilizados": sorted(list(salones_usados)),
+                "resumen_grupos": resumen_res,
+                "alertas": alertas_res,
+                "mensaje": f"Se preasignaron exitosamente {len(grupos_pendientes)} grupo(s) pendiente(s) ({tot_materias} materias). Los grupos con aula previa no fueron modificados."
             }
 
         # Separar grupos regulares (>= 4 materias) y grupos reducidos (< 4 materias)
@@ -455,20 +517,31 @@ class GeneradorPreasignacion:
 
                     # Limpiar asignaciones previas no asignadas o preexistentes de esa materia y grupo
                     cur.execute(
-                        "SELECT asignacion_id FROM asignaciones WHERE grupo_id = %s AND materia_id = %s",
+                        "SELECT asignacion_id, profesor_id, estado FROM asignaciones WHERE grupo_id = %s AND materia_id = %s",
                         (g_id, m_id)
                     )
                     existente = cur.fetchone()
                     if existente:
                         asig_id = existente[0]
+                        p_actual = existente[1]
+                        est_actual = existente[2]
+
+                        # Si ya tenía profesor y conservar_profesores es True, mantenerlo
+                        if conservar_profesores and p_actual and str(p_actual).strip() != 'SIN_ASIGNAR':
+                            prof_final = p_actual
+                            est_final = est_actual or 'asignado'
+                        else:
+                            prof_final = 'SIN_ASIGNAR'
+                            est_final = 'no asignado'
+
                         # Limpiar horarios previos
                         cur.execute("DELETE FROM horarios WHERE asignacion_id = %s", (asig_id,))
                         cur.execute("""
                             UPDATE asignaciones
-                            SET profesor_id = 'SIN_ASIGNAR', periodo = %s, hora_inicio = %s,
-                                hora_fin = %s, dias = %s, modalidad = 'Presencial', estado = 'no asignado'
+                            SET profesor_id = %s, periodo = %s, hora_inicio = %s,
+                                hora_fin = %s, dias = %s, modalidad = 'Presencial', estado = %s
                             WHERE asignacion_id = %s
-                        """, (asig['periodo'], asig['hora_inicio'], asig['hora_fin'], asig['dias'], asig_id))
+                        """, (prof_final, asig['periodo'], asig['hora_inicio'], asig['hora_fin'], asig['dias'], est_final, asig_id))
                     else:
                         cur.execute("""
                             INSERT INTO asignaciones
