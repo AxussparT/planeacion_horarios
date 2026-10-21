@@ -387,7 +387,7 @@ class VentanaGestion:
         ttk.Label(f_modo_linea, text="Modalidad:", background='#0A0F1E', foreground='white', font=self._fuente_label).pack(side='left', padx=(0, 4))
         self.combo_modalidad_vinculo = ttk.Combobox(
             f_modo_linea,
-            values=["Presencial", "Mediación Tecnológica"],
+            values=["Presencial", "En Línea (Mediación Tecnológica)", "Mediación Tecnológica"],
             state="readonly",
             width=20,
             font=self._fuente_label
@@ -1063,7 +1063,7 @@ class VentanaGestion:
             return
 
         # 6. Choque de Aula (si es presencial)
-        if modalidad_sel == "Mediación Tecnológica":
+        if self._es_modalidad_en_linea(modalidad_sel):
             if not aula_sel or aula_sel == "Sin aula":
                 aula_sel = "MEDIACION_TECNOLOGICA"
         else:
@@ -1615,7 +1615,7 @@ class VentanaGestion:
                 messagebox.showerror("Conflicto de Grupo", f"El grupo '{grupo_id}' ya tiene clases en ese horario:\n\n{det}")
                 return
             # Choque aula
-            if modalidad == "Mediación Tecnológica":
+            if self._es_modalidad_en_linea(modalidad):
                 if not aula_sel or aula_sel == "Sin aula":
                     aula_sel = "MEDIACION_TECNOLOGICA"
             else:
@@ -1632,7 +1632,7 @@ class VentanaGestion:
             hora_f = asig_info['hora_fin']
             dias_str = asig_info['dias']
             dias_lista = [d.strip() for d in dias_str.split(',') if d.strip()]
-            aula_sel = asig_info.get('salon_id', 'Sin aula')
+            aula_sel = "MEDIACION_TECNOLOGICA" if self._es_modalidad_en_linea(modalidad) else asig_info.get('salon_id', 'Sin aula')
 
             # --- Detección y Sugerencia de Compactación Continua Docente ---
             compactacion = self._detectar_compactacion_docente(
@@ -1770,6 +1770,8 @@ class VentanaGestion:
                         SET profesor_id = %s, estado = %s, modalidad = %s
                         WHERE asignacion_id = %s
                     """, (prof_id, estado, modalidad, asig_id))
+                    if self._es_modalidad_en_linea(modalidad):
+                        cur.execute("UPDATE horarios SET salon_id = 'MEDIACION_TECNOLOGICA' WHERE asignacion_id = %s", (asig_id,))
                 conn.commit()
             except sqlite3.Error as err:
                 conn.rollback()
@@ -2221,6 +2223,14 @@ class VentanaGestion:
     def _normalizar_dia(valor):
         s = unicodedata.normalize('NFKD', str(valor)).encode('ascii', 'ignore').decode('ascii').strip().lower()
         return VentanaGestion._DIA_SIN_ACENTOS.get(s, str(valor).strip())
+
+    @staticmethod
+    def _es_modalidad_en_linea(mod):
+        if not mod:
+            return False
+        import unicodedata
+        s = unicodedata.normalize('NFKD', str(mod)).encode('ascii', 'ignore').decode('ascii').strip().lower()
+        return "mediacion" in s or "linea" in s or "virtual" in s or "online" in s
 
     def _cargar_periodos_desde_bd(self):
         if not self._profesor_id_seleccionado:
@@ -4361,7 +4371,7 @@ class VentanaGestion:
                 tipo_row = cur.fetchone()
                 tipo_materia = (tipo_row[0] or 'Normal').lower() if tipo_row else 'normal'
 
-                es_mediacion = str(modalidad or 'Presencial') == 'Mediacion Tecnologica'
+                es_mediacion = self._es_modalidad_en_linea(modalidad)
 
                 if es_mediacion:
                     cur.execute("SELECT salon_id FROM salones WHERE salon_id LIKE 'MEDIACION_TECNOLOGICA%' LIMIT 1")

@@ -250,7 +250,8 @@ class GeneradorSabana:
 
                         if coincidentes:
                             ses = coincidentes[0]
-                            modal_txt = " [MT]" if ses.get('modalidad') == 'Mediación Tecnológica' else ""
+                            mod_str = str(ses.get('modalidad', '')).lower()
+                            modal_txt = " [MT]" if ('mediacion' in mod_str or 'linea' in mod_str or 'virtual' in mod_str) else ""
                             txt = (
                                 f"{ses['materia_nombre']} ({ses['hora_inicio']} - {ses['hora_fin']})\n"
                                 f"Prof: {ses['profesor_nombre']}\n"
@@ -360,7 +361,9 @@ class GeneradorSabana:
                             ]
                             if coincidentes:
                                 s = coincidentes[0]
-                                txt = f"{s['materia_nombre'][:20]} ({s['hora_inicio']}-{s['hora_fin']})\n{s['profesor_nombre'][:20]}\nAula: {s['salon_id']}"
+                                mod_str = str(s.get('modalidad', '')).lower()
+                                modal_txt = " [MT]" if ('mediacion' in mod_str or 'linea' in mod_str or 'virtual' in mod_str) else ""
+                                txt = f"{s['materia_nombre'][:20]} ({s['hora_inicio']}-{s['hora_fin']})\n{s['profesor_nombre'][:20]}\nAula: {s['salon_id']}{modal_txt}"
                                 fila.append(txt)
                             else:
                                 fila.append("-")
