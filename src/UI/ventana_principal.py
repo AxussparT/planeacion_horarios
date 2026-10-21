@@ -1440,9 +1440,9 @@ class VentanaPrincipal:
         """
         seleccion = [None]
 
-        dialogo = tk.Toplevel(self.root)
+        dialogo = tk.Toplevel(self.master)
         dialogo.title("Preasignación de Aulas y Horarios")
-        dialogo.transient(self.root)
+        dialogo.transient(self.master)
         dialogo.grab_set()
         dialogo.configure(background='#0A0F1E')
         dialogo.geometry("540x360")
