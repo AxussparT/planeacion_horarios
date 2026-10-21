@@ -7,4 +7,5 @@ build/
 *.spec
 config.json
 *.exe
-instalador/
+instalador/*
+!instalador/*.iss
