@@ -1,6 +1,19 @@
 from src.conexion import get_conexion
 from tkinter import messagebox
 import sqlite3
+import unicodedata
+
+def normalizar_tipo(tipo):
+    if not tipo:
+        return 'NORMAL'
+    t = ''.join(ch for ch in unicodedata.normalize('NFD', str(tipo)) if unicodedata.category(ch) != 'Mn').upper()
+    if 'TEC' in t or 'COMPUT' in t:
+        return 'TECNOLOGICA'
+    if 'LAB' in t:
+        return 'LABORATORIO'
+    if 'AUD' in t:
+        return 'AUDITORIO'
+    return 'NORMAL'
 
 def validar_y_registrar_materia(clave, nombre, horas_semana, semestre, tipo):
     print(f"Iniciando registro/actualización para: {clave} - {nombre} (Tipo: {tipo})...")
@@ -8,7 +21,7 @@ def validar_y_registrar_materia(clave, nombre, horas_semana, semestre, tipo):
     clave = str(clave).strip().upper()
     nombre = str(nombre).strip().upper()
     horas_str = str(horas_semana).strip()
-    tipo = str(tipo).strip().upper()
+    tipo = normalizar_tipo(tipo)
     
     semestre_str = str(semestre or "").strip()
     if semestre_str and (

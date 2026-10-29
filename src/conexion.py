@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS profesores (
     disponible_inicio TIME DEFAULT NULL,
     disponible_fin TIME DEFAULT NULL,
     dias_disponibles TEXT DEFAULT NULL,
-    en_linea TEXT DEFAULT 'NO'
+    en_linea TEXT DEFAULT 'NO',
+    acude_toda_semana TEXT DEFAULT 'SI'
 );
 
 CREATE TABLE IF NOT EXISTS materias (
@@ -32,7 +33,8 @@ CREATE TABLE IF NOT EXISTS materias (
 
 CREATE TABLE IF NOT EXISTS grupos (
     grupo_id TEXT PRIMARY KEY,
-    nivel INTEGER DEFAULT NULL
+    nivel INTEGER DEFAULT NULL,
+    cupo INTEGER NOT NULL DEFAULT 30
 );
 
 CREATE TABLE IF NOT EXISTS grupo_materias (
@@ -256,6 +258,14 @@ def _inicializar_esquema(conn):
 
 def _crear_esquema(conn):
     conn.executescript(_ESQUEMA)
+    try:
+        conn.execute('ALTER TABLE grupos ADD COLUMN cupo INTEGER NOT NULL DEFAULT 30')
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE profesores ADD COLUMN acude_toda_semana TEXT DEFAULT 'SI'")
+    except Exception:
+        pass
     conn.executemany(
         "INSERT OR IGNORE INTO semestres (id_semestre, nombre) VALUES (?, ?)",
         _SEMESTRES_INICIALES
@@ -275,6 +285,11 @@ def get_conexion():
         conexion.row_factory = sqlite3.Row
         conexion.execute("PRAGMA foreign_keys = ON")
         conexion.execute("PRAGMA busy_timeout = 30000")
+        try:
+            conexion.execute("PRAGMA journal_mode = WAL")
+            conexion.execute("PRAGMA synchronous = NORMAL")
+        except Exception:
+            pass
         _inicializar_esquema(conexion)
         return conexion
     except sqlite3.Error as err:

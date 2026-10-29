@@ -7,6 +7,7 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         ('src/UI/SAGA.png', 'src/UI'),
+        ('src/UI/SAGA.ico', 'src/UI'),
     ],
     hiddenimports=[
         'PIL',

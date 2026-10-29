@@ -78,10 +78,11 @@ servicio_S/
 │   └── fondo.png                    # Imagen de fondo de la ventana
 ├── src/
 │   ├── conexion.py                  # Conexión y esquema SQLite local
-│   ├── motor_horarios.py            # Algoritmo original de generación automática
-│   ├── motor_horarios_backup.py     # Backup exacto del motor original
-│   ├── motor_horarios_nuevo.py      # Motor actual: asigna salones (1 sesión por día)
-│   ├── resp_motor.py                # (vacio - reservado)
+│   ├── motor_horarios.py            # Motor principal de asignación automática de horarios y salones
+│   ├── motor_preasignacion.py       # Motor de preasignación de aulas y horarios por grupo
+│   ├── generador_sabana.py          # Generador de reportes en formato sábana (Excel / PDF)
+│   ├── gestor_restauracion.py       # Utilidades de respaldo y restauración
+├── legacy_archive/                  # Archivo de motores y versiones históricas (backup)
 │   ├── clases/
 │   │   ├── __init__.py
 │   │   ├── grupo.py                 # Modelo de grupos (grupo_id, nivel)

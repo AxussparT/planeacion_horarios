@@ -23,7 +23,7 @@ def _generar_profesor_id(cursor):
     next_num = (max_id if max_id else 0) + 1
     return f"P{next_num:04d}"
 
-def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos, correo_institucional=None):
+def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos, correo_institucional=None, acude_toda_semana='SI'):
     conexion = None
     cursor = None
     transaccion_exitosa = False
@@ -57,11 +57,12 @@ def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos, correo_in
             profesor_id = existente[0]
             cursor.execute("""
                 UPDATE profesores
-                SET nombre = %s, correo_institucional = %s
+                SET nombre = %s, correo_institucional = %s, acude_toda_semana = %s
                 WHERE profesor_id = %s
             """, (
                 nombre_completo,
                 correo_institucional,
+                acude_toda_semana,
                 profesor_id
             ))
 
@@ -82,10 +83,10 @@ def validar_y_registrar_profesor(no_cuenta, nombre_completo, periodos, correo_in
         else:
             profesor_id = _generar_profesor_id(cursor)
             cursor.execute("""
-                INSERT INTO profesores (profesor_id, no_cuenta, nombre, correo_institucional, disponible_inicio, disponible_fin, dias_disponibles, en_linea)
-                VALUES (%s, %s, %s, %s, '00:00:00', '00:00:00', '', 'NO')
+                INSERT INTO profesores (profesor_id, no_cuenta, nombre, correo_institucional, disponible_inicio, disponible_fin, dias_disponibles, en_linea, acude_toda_semana)
+                VALUES (%s, %s, %s, %s, '00:00:00', '00:00:00', '', 'NO', %s)
             """, (
-                profesor_id, no_cuenta, nombre_completo, correo_institucional
+                profesor_id, no_cuenta, nombre_completo, correo_institucional, acude_toda_semana
             ))
 
             sql_insert_disp = """INSERT INTO profesor_disponibilidad (profesor_id, dia, hora_inicio, hora_fin)

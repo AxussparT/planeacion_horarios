@@ -3,10 +3,11 @@ from tkinter import messagebox
 import sqlite3
 
 class grupo:
-    def __init__(self, grupo_id, nivel, materias=None):
+    def __init__(self, grupo_id, nivel, materias=None, cupo=30):
         self.grupo_id = str(grupo_id).strip().upper()
         self.nivel = str(nivel).strip()
         self.materias = materias
+        self.cupo = str(cupo).strip() if cupo is not None else "30"
         self.exito = False
 
         if not self.grupo_id or len(self.grupo_id) > 20:
@@ -21,6 +22,11 @@ class grupo:
             messagebox.showerror("Error de Datos", "El semestre debe ser un número entero de hasta 2 dígitos.")
             return
 
+        if not self.cupo.isdigit() or len(self.cupo) > 3 or int(self.cupo) <= 0:
+            messagebox.showerror("Error de Datos", "El cupo de alumnos debe ser un número entero positivo de hasta 3 dígitos.")
+            return
+        self.cupo = int(self.cupo)
+
         self.exito = self.procesar_datos()
 
     def procesar_datos(self):
@@ -31,10 +37,10 @@ class grupo:
             try:
                 cur.execute("SELECT grupo_id FROM grupos WHERE grupo_id = %s", (self.grupo_id,))
                 if cur.fetchone():
-                    cur.execute("UPDATE grupos SET nivel = %s WHERE grupo_id = %s", (self.nivel, self.grupo_id))
+                    cur.execute("UPDATE grupos SET nivel = %s, cupo = %s WHERE grupo_id = %s", (self.nivel, self.cupo, self.grupo_id))
                     msg = f"Grupo '{self.grupo_id}' actualizado correctamente"
                 else:
-                    cur.execute("INSERT INTO grupos (grupo_id, nivel) VALUES (%s, %s)", (self.grupo_id, self.nivel))
+                    cur.execute("INSERT INTO grupos (grupo_id, nivel, cupo) VALUES (%s, %s, %s)", (self.grupo_id, self.nivel, self.cupo))
                     msg = f"Grupo '{self.grupo_id}' guardado correctamente"
 
                 if self.materias is not None:

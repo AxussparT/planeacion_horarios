@@ -1,12 +1,25 @@
 from src.conexion import get_conexion
 from tkinter import messagebox
 import sqlite3
+import unicodedata
+
+def normalizar_tipo(tipo):
+    if not tipo:
+        return 'NORMAL'
+    t = ''.join(ch for ch in unicodedata.normalize('NFD', str(tipo)) if unicodedata.category(ch) != 'Mn').upper()
+    if 'TEC' in t or 'COMPUT' in t:
+        return 'TECNOLOGICA'
+    if 'LAB' in t:
+        return 'LABORATORIO'
+    if 'AUD' in t:
+        return 'AUDITORIO'
+    return 'NORMAL'
 
 class salon:
     def __init__(self, numero_aula, capacidad, tipo):
         self.numero_aula = str(numero_aula).strip().upper()
         self.capacidad = str(capacidad).strip()
-        self.tipo = str(tipo).strip().upper()
+        self.tipo = normalizar_tipo(tipo)
         self.exito = False
 
         if not self.numero_aula or len(self.numero_aula) > 4:
@@ -34,7 +47,7 @@ class salon:
             try:
                 sql = "INSERT INTO salones (salon_id, capacidad, tipo) VALUES (%s, %s, %s)"
                 cur.execute(sql, (self.numero_aula, self.capacidad, self.tipo))
-                messagebox.showinfo("Éxito", f"Salón '{self.numero_aula}' guardado correctamente")
+                messagebox.showinfo("Éxito", f"Salón '{self.numero_aula}' guardado correctamente.")
                 return True
             except sqlite3.Error as err:
                 conn.rollback()

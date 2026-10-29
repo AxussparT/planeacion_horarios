@@ -13,6 +13,21 @@ import math
 import sqlite3
 from src.conexion import get_conexion, obtener_cursor
 
+import unicodedata
+
+def normalizar_tipo(tipo):
+    if not tipo:
+        return 'NORMAL'
+    t = ''.join(ch for ch in unicodedata.normalize('NFD', str(tipo)) if unicodedata.category(ch) != 'Mn').upper()
+    if 'TEC' in t or 'COMPUT' in t:
+        return 'TECNOLOGICA'
+    if 'LAB' in t:
+        return 'LABORATORIO'
+    if 'AUD' in t:
+        return 'AUDITORIO'
+    return 'NORMAL'
+
+
 class GeneradorPreasignacion:
     HORA_BASE = 7  # 07:00 AM es el slot 0
     MINUTOS_SLOT = 30
@@ -44,6 +59,7 @@ class GeneradorPreasignacion:
         self.salones_normales = []
         self.salones_computo = []
         self.salones_otros = {}       # tipo -> [salon_id, ...]
+        self.capacidades_salones = {} # salon_id -> capacidad int
 
     @classmethod
     def hora_a_slot(cls, hora_str):
@@ -80,8 +96,9 @@ class GeneradorPreasignacion:
         if not conn:
             return
         cur = conn.cursor()
-        cur.execute("SELECT salon_id, capacidad, tipo FROM salones ORDER BY salon_id")
+        cur.execute("SELECT salon_id, capacidad, tipo FROM salones ORDER BY capacidad DESC, salon_id")
         seen_upper = set()
+        self.capacidades_salones.clear()
         for row in cur.fetchall():
             s_id = str(row[0]).strip()
             if s_id.upper().startswith("MEDIACION_TECNOLOGICA"):
@@ -89,11 +106,13 @@ class GeneradorPreasignacion:
             if s_id.upper() in seen_upper:
                 continue
             seen_upper.add(s_id.upper())
+            cap = int(row[1] or 0)
+            self.capacidades_salones[s_id] = cap
             tipo_val = row[2] if len(row) > 2 and row[2] is not None else 'Normal'
-            t = str(tipo_val).strip().upper()
-            if t in ('NORMAL',):
+            t = normalizar_tipo(tipo_val)
+            if t == 'NORMAL':
                 self.salones_normales.append(s_id)
-            elif t in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN') or 'TECNOL' in t:
+            elif t == 'TECNOLOGICA':
                 self.salones_computo.append(s_id)
             else:
                 self.salones_otros.setdefault(t, []).append(s_id)
@@ -115,13 +134,14 @@ class GeneradorPreasignacion:
             return []
         cur = conn.cursor()
 
-        cur.execute("SELECT grupo_id, nivel FROM grupos ORDER BY nivel, grupo_id")
+        cur.execute("SELECT grupo_id, nivel, COALESCE(cupo, 30) FROM grupos ORDER BY nivel, grupo_id")
         grupos_bd = cur.fetchall()
 
         resultado = []
         for g_row in grupos_bd:
             g_id = str(g_row[0])
             nivel = g_row[1] if len(g_row) > 1 and g_row[1] is not None else 1
+            cupo_grupo = int(g_row[2] if len(g_row) > 2 and g_row[2] is not None else 30)
             try:
                 nivel_num = int(nivel)
             except ValueError:
@@ -156,6 +176,7 @@ class GeneradorPreasignacion:
                 resultado.append({
                     'grupo_id': g_id,
                     'nivel': nivel_num,
+                    'cupo': cupo_grupo,
                     'periodo': periodo,
                     'materias': mats
                 })
@@ -306,15 +327,15 @@ class GeneradorPreasignacion:
                 "mensaje": f"Se preasignaron exitosamente {len(grupos_pendientes)} grupo(s) pendiente(s) ({tot_materias} materias). Los grupos con aula previa no fueron modificados."
             }
 
-        # Separar grupos regulares (>= 4 materias) y grupos reducidos (< 4 materias)
-        grupos_regulares = [g for g in grupos if len(g['materias']) >= 4]
-        grupos_reducidos = [g for g in grupos if len(g['materias']) < 4]
+        # Separar grupos regulares (> 4 materias) y grupos reducidos (<= 4 materias)
+        grupos_regulares = [g for g in grupos if len(g['materias']) > 4]
+        grupos_reducidos = [g for g in grupos if len(g['materias']) <= 4]
 
         # Planificación de distribución en salones normales:
         # Cada salón normal puede albergar:
-        # 1) 2 grupos regulares (Franja 1: 07:00-13:00, Franja 2: 13:00-19:00+)
-        # 2) 1 grupo regular + hasta 2 grupos reducidos
-        # 3) hasta 3 grupos reducidos (07:00-11:00, 11:00-15:00, 15:00-19:00)
+        # 1) 2 grupos regulares (> 4 materias: Franja 1: 07:00-13:00, Franja 2: 13:00-17:00)
+        # 2) 1 grupo regular + hasta 2 grupos reducidos (07:00-13:00 regular, 13:00-15:00 red1, 15:00-17:00 red2)
+        # 3) hasta 4 grupos reducidos (<= 4 materias: 07:00-09:30, 09:30-12:00, 12:00-14:30, 14:30-17:00)
         asignacion_aulas = {}  # grupo_id -> (salon_normal, slot_min, slot_max)
 
         idx_salon = 0
@@ -347,17 +368,23 @@ class GeneradorPreasignacion:
 
             idx_salon += 1
 
-        # 2. Empaquetar grupos reducidos restantes (hasta 3 por salón)
+        # 2. Empaquetar grupos reducidos restantes (hasta 4 por salón)
         while grupos_reducidos:
             salon_asignado = self.salones_normales[idx_salon % total_salones_norm]
             idx_salon += 1
 
-            # Tomar hasta 3 grupos reducidos
+            # Tomar hasta 4 grupos reducidos
             lote_red = []
-            for _ in range(min(3, len(grupos_reducidos))):
+            for _ in range(min(4, len(grupos_reducidos))):
                 lote_red.append(grupos_reducidos.pop(0))
 
-            if len(lote_red) == 3:
+            if len(lote_red) == 4:
+                # 4 grupos en el salón: 07:00-09:30 (0 a 5), 09:30-12:00 (5 a 10), 12:00-14:30 (10 a 15), 14:30-17:00 (15 a 20)
+                asignacion_aulas[lote_red[0]['grupo_id']] = (salon_asignado, 0, 5)
+                asignacion_aulas[lote_red[1]['grupo_id']] = (salon_asignado, 5, 10)
+                asignacion_aulas[lote_red[2]['grupo_id']] = (salon_asignado, 10, 15)
+                asignacion_aulas[lote_red[3]['grupo_id']] = (salon_asignado, 15, 20)
+            elif len(lote_red) == 3:
                 # 3 grupos en el salón: 07:00-10:20 (0 a 7), 10:20-13:40 (7 a 14), 13:40-17:00 (14 a 20)
                 asignacion_aulas[lote_red[0]['grupo_id']] = (salon_asignado, 0, 7)
                 asignacion_aulas[lote_red[1]['grupo_id']] = (salon_asignado, 7, 14)
@@ -375,7 +402,7 @@ class GeneradorPreasignacion:
         if self.salones_computo:
             idx_lab = 0
             for g in grupos:
-                tiene_computo = any(m['tipo'] in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN') for m in g['materias'])
+                tiene_computo = any(normalizar_tipo(m['tipo']) == 'TECNOLOGICA' for m in g['materias'])
                 if tiene_computo:
                     lab_escogido = self.salones_computo[idx_lab % len(self.salones_computo)]
                     laboratorio_por_grupo[g['grupo_id']] = lab_escogido
@@ -400,11 +427,12 @@ class GeneradorPreasignacion:
                 h_sem = mat['horas_semana']
 
                 # Salón correspondiente según tipo de materia
-                if m_tipo in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN'):
+                t_m = normalizar_tipo(m_tipo)
+                if t_m == 'TECNOLOGICA':
                     salon_objetivo = lab_grupo or (self.salones_computo[0] if self.salones_computo else salon_base)
-                elif m_tipo == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
+                elif t_m == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
                     salon_objetivo = self.salones_otros['AUDITORIO'][0]
-                elif m_tipo == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
+                elif t_m == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
                     salon_objetivo = self.salones_otros['LABORATORIO'][0]
                 else:
                     salon_objetivo = salon_base
@@ -625,14 +653,16 @@ class GeneradorPreasignacion:
                 return {"exito": False, "mensaje": "No se pudo conectar a la base de datos."}
             cur, conn = ctx
 
-            # 1. Obtener nivel del grupo
-            cur.execute("SELECT nivel FROM grupos WHERE grupo_id = %s", (grupo_id,))
+            # 1. Obtener nivel y cupo del grupo
+            cur.execute("SELECT nivel, COALESCE(cupo, 30) FROM grupos WHERE grupo_id = %s", (grupo_id,))
             g_row = cur.fetchone()
             if not g_row:
                 return {"exito": False, "mensaje": f"El grupo '{grupo_id}' no existe en la base de datos."}
             nivel_num = 1
+            cupo_g = 30
             try:
                 nivel_num = int(g_row[0])
+                cupo_g = int(g_row[1] if len(g_row) > 1 and g_row[1] is not None else 30)
             except (ValueError, TypeError):
                 pass
             periodo = 'A' if nivel_num in (2, 4, 6, 8, 10) else 'B'
@@ -681,7 +711,12 @@ class GeneradorPreasignacion:
                 mejor_shift = True
                 mejor_huecos = -1
 
-                for s_id in self.salones_normales:
+                # Priorizar aulas cuya capacidad >= cupo_g
+                candidatos = sorted(
+                    self.salones_normales,
+                    key=lambda s: (0 if self.capacidades_salones.get(s, 0) >= cupo_g else 1, -self.capacidades_salones.get(s, 0))
+                )
+                for s_id in candidatos:
                     ocup_manana = sum(1 for d in self.DIAS_SEMANA for slot in range(0, 12) if self.ocupacion_salones.get((s_id, d, slot)))
                     ocup_tarde = sum(1 for d in self.DIAS_SEMANA for slot in range(12, 20) if self.ocupacion_salones.get((s_id, d, slot)))
 
@@ -721,11 +756,12 @@ class GeneradorPreasignacion:
                 m_tipo = mat['tipo']
                 h_sem = mat['horas_semana']
 
-                if m_tipo in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN') or 'TECNOL' in m_tipo:
+                t_m = normalizar_tipo(m_tipo)
+                if t_m == 'TECNOLOGICA':
                     salon_obj = lab_computo
-                elif m_tipo == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
+                elif t_m == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
                     salon_obj = self.salones_otros['AUDITORIO'][0]
-                elif m_tipo == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
+                elif t_m == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
                     salon_obj = self.salones_otros['LABORATORIO'][0]
                 else:
                     salon_obj = salon_base
@@ -1002,11 +1038,12 @@ class GeneradorPreasignacion:
                     m_tipo = mat['tipo']
                     h_sem = mat['horas_semana']
 
-                    if m_tipo in ('TECNOLOGICA', 'TECNOLÓGICA', 'LABORATORIO DE COMPUTACION', 'LABORATORIO DE COMPUTACIÓN'):
+                    t_m = normalizar_tipo(m_tipo)
+                    if t_m == 'TECNOLOGICA':
                         salon_objetivo = lab_computo or salon_base
-                    elif m_tipo == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
+                    elif t_m == 'AUDITORIO' and self.salones_otros.get('AUDITORIO'):
                         salon_objetivo = self.salones_otros['AUDITORIO'][0]
-                    elif m_tipo == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
+                    elif t_m == 'LABORATORIO' and self.salones_otros.get('LABORATORIO'):
                         salon_objetivo = self.salones_otros['LABORATORIO'][0]
                     else:
                         salon_objetivo = salon_base
@@ -1139,3 +1176,18 @@ class GeneradorPreasignacion:
                 "total_solicitadas": len(asigs_a_reacomodar),
                 "intentos": intentos
             }
+
+
+def normalizar_tipo(tipo):
+    if not tipo:
+        return 'NORMAL'
+    t = ''.join(ch for ch in unicodedata.normalize('NFD', str(tipo)) if unicodedata.category(ch) != 'Mn').upper()
+    if 'TEC' in t or 'COMPUT' in t:
+        return 'TECNOLOGICA'
+    if 'LAB' in t:
+        return 'LABORATORIO'
+    if 'AUD' in t:
+        return 'AUDITORIO'
+    return 'NORMAL'
+
+

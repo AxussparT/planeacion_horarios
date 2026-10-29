@@ -9,3 +9,7 @@ config.json
 *.exe
 instalador/*
 !instalador/*.iss
+backup_original_pre_modularizacion/
+*.db
+*.sqlite
+*.sqlite3
